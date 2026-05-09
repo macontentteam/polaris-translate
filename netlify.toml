@@ -1,0 +1,33 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[functions."gemini-proxy"]
+  timeout = 60
+
+[functions."openai-audit"]
+  timeout = 60
+
+[[redirects]]
+  from = "/api/gemini-proxy"
+  to = "/.netlify/functions/gemini-proxy"
+  status = 200
+
+[[redirects]]
+  from = "/api/openai-audit"
+  to = "/.netlify/functions/openai-audit"
+  status = 200
+
+[[redirects]]
+  from = "/api/gcs-upload"
+  to = "/.netlify/functions/gcs-upload"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
