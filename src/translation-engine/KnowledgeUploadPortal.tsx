@@ -225,6 +225,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
   const [targetLanguage, setTargetLanguage] = useState<string>('German (Germany)');
   const [showQueue, setShowQueue] = useState(false);
   const [previewItemId, setPreviewItemId] = useState<string | null>(null);
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Derive previewItem from queue so it always reflects latest state
@@ -236,9 +237,20 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
   const totalErrors = queue.filter(f => f.status === 'error').length;
   const isUploading = queue.some(f => f.status === 'uploading' || f.status === 'processing');
 
+  const requireAdmin = (callback: () => void) => {
+    if (adminUnlocked) { callback(); return; }
+    const code = window.prompt('Enter admin code to upload knowledge files:');
+    if (code === '1555') {
+      setAdminUnlocked(true);
+      callback();
+    }
+  };
+
   const handleCardClick = (cardId: string) => {
-    setActiveCard(cardId);
-    setTimeout(() => fileInputRef.current?.click(), 50);
+    requireAdmin(() => {
+      setActiveCard(cardId);
+      setTimeout(() => fileInputRef.current?.click(), 50);
+    });
   };
 
   const handleFilesSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -264,6 +276,11 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
   const handleDrop = useCallback((e: React.DragEvent, cardId: string) => {
     e.preventDefault();
     e.stopPropagation();
+    if (!adminUnlocked) {
+      const code = window.prompt('Enter admin code to upload knowledge files:');
+      if (code !== '1555') return;
+      setAdminUnlocked(true);
+    }
     const files = e.dataTransfer.files;
     if (!files.length) return;
 
@@ -277,7 +294,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
 
     setQueue(prev => [...prev, ...newFiles]);
     setShowQueue(true);
-  }, []);
+  }, [adminUnlocked]);
 
   const removeFromQueue = (id: string) => {
     setQueue(prev => prev.filter(f => f.id !== id));
