@@ -1,14 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Loader2, Sparkles, HelpCircle } from 'lucide-react';
 
-const GEMINI_PROXY_URL = "/api/gemini-proxy";
+const CLAUDE_PROXY_URL = "/api/claude-proxy";
 
 const CHATBOT_SYSTEM_INSTRUCTION = `You are the Polaris Support AI, an expert in global translation and localization.
 POLARIS ENGINE SPECS:
 - Core: Glacier Core Architecture for data isolation and high-fidelity verification.
-- Verification: Dual-intelligence (Gemini + GPT-5.2 proxy) meaning check and audit.
+- Verification: Dual-intelligence (Claude + GPT-5.2 proxy) meaning check and audit.
 - Capability: Supports Text, Documents (PDF/Word), and Media (Video/Audio/Image OCR).
-- Workflow: Multi-round consensus (up to 3 rounds) to hit 98/100 quality threshold.
+- Workflow: Multi-round consensus to hit 95/100 quality threshold.
 - Languages: 14+ specific target mappings like German (Germany), Chinese (Mandarin), etc.
 - Modes: Cybersecurity (specialized glossary), General, and Custom (user glossaries).
 - Troubleshoot: If 'Failed to fetch' occurs, it usually means the audit proxy is down; suggest 'General' mode as a temporary bypass.
@@ -42,27 +42,25 @@ export const ChatBot: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Build full conversation history for the proxy (REST API contents format)
-      const contents = updatedMessages.map(m => ({
-        role: m.role,
-        parts: [{ text: m.text }],
+      const claudeMessages = updatedMessages.map(m => ({
+        role: m.role === 'model' ? 'assistant' : 'user',
+        content: m.text,
       }));
 
-      const response = await fetch(GEMINI_PROXY_URL, {
+      const response = await fetch(CLAUDE_PROXY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "gemini-2.5-flash",
-          contents,
-          systemInstruction: { parts: [{ text: CHATBOT_SYSTEM_INSTRUCTION }] },
-          generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+          messages: claudeMessages,
+          system: CHATBOT_SYSTEM_INSTRUCTION,
+          max_tokens: 1024,
         }),
       });
 
       if (!response.ok) throw new Error(`Proxy error: ${response.status}`);
 
       const data = await response.json();
-      const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "I'm having trouble processing that right now.";
+      const replyText = data.text || "I'm having trouble processing that right now.";
       setMessages(prev => [...prev, { role: 'model', text: replyText }]);
     } catch (error: any) {
       setMessages(prev => [...prev, { role: 'model', text: "Technical error connecting to Polaris AI. Please check your network." }]);

@@ -428,7 +428,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({
       : ''
   }
 
-  <footer>Translation Engine | Powered by Gemini + GPT-5.2 | ${escapeHtml(new Date().toLocaleDateString())}</footer>
+  <footer>Translation Engine | Powered by Claude + GPT-5.2 | ${escapeHtml(new Date().toLocaleDateString())}</footer>
 </body>
 </html>`;
   };

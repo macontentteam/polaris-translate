@@ -139,7 +139,7 @@ export interface AuditError {
   current: string;
   suggested: string;
   severity: 'critical' | 'major' | 'minor';
-  detectedBy: 'GPT-4o' | 'Gemini' | 'System';
+  detectedBy: 'GPT-4o' | 'Claude' | 'System';
 }
 
 export interface AuditResult {
@@ -363,7 +363,7 @@ export interface AppState {
   customFormalityPrompt?: string;
 
   connectionStatus: {
-    gemini: 'connected' | 'disconnected' | 'testing';
+    claude: 'connected' | 'disconnected' | 'testing';
     openai: 'connected' | 'disconnected' | 'testing';
   };
 

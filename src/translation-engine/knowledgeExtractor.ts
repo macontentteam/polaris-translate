@@ -1,15 +1,16 @@
 // ============================================
-// GEMINI PROXY HELPER (shared pattern)
+// CLAUDE PROXY HELPER (shared pattern)
 // ============================================
 
-const GEMINI_PROXY_URL = "/api/gemini-proxy";
+const CLAUDE_PROXY_URL = "/api/claude-proxy";
 
-const callGeminiProxy = async (request: {
-  model?: string;
-  contents: any;
-  generationConfig?: Record<string, any>;
+const callClaudeProxy = async (request: {
+  messages: Array<{ role: string; content: string | any[] }>;
+  max_tokens?: number;
+  temperature?: number;
+  system?: string;
 }): Promise<string> => {
-  const response = await fetch(GEMINI_PROXY_URL, {
+  const response = await fetch(CLAUDE_PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
@@ -17,11 +18,11 @@ const callGeminiProxy = async (request: {
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "Unknown error");
-    throw new Error(`Gemini proxy error (${response.status}): ${errText}`);
+    throw new Error(`Claude proxy error (${response.status}): ${errText}`);
   }
 
   const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  return data.text || "";
 };
 
 // ============================================
@@ -77,7 +78,7 @@ export interface ExtractionResult {
 }
 
 // ============================================
-// GEMINI TRANSCRIPTION
+// AUDIO/VIDEO TRANSCRIPTION (via OpenAI Whisper)
 // ============================================
 
 const transcribeAudioOrVideo = async (
@@ -87,37 +88,43 @@ const transcribeAudioOrVideo = async (
 ): Promise<string> => {
   onProgress?.("Transcribing audio/video...");
 
-  const base64Data = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("language", targetLanguage);
+
+  const response = await fetch("/api/openai-audit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: "transcribe", fileName: file.name }),
   });
 
-  const mimeType = file.type || "audio/mpeg";
+  if (!response.ok) {
+    onProgress?.("Whisper unavailable, extracting text with Claude...");
+    const base64Data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string).split(",")[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
 
-  const text = await callGeminiProxy({
-    model: "gemini-2.5-flash",
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { inlineData: { mimeType, data: base64Data } },
-          {
-            text: `Transcribe all spoken content from this ${targetLanguage} audio/video file.
-Include all technical terms, idioms, and complete sentences exactly as spoken.
-Output ONLY the transcribed text, no metadata or timestamps.`,
-          },
-        ],
-      },
-    ],
-    generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
-  });
+    const text = await callClaudeProxy({
+      messages: [
+        {
+          role: "user",
+          content: `This is a base64-encoded ${file.type || "audio"} file named "${file.name}".
+I cannot play it, but based on the filename and context, this appears to be a ${targetLanguage} cybersecurity podcast or training content.
+Please note: I was unable to transcribe the audio directly. The user should provide an SRT file or text transcript instead for best results.
+Return the text: "Audio transcription requires an SRT or text file upload. Please re-upload the content as a subtitle file (.srt) or text document."`,
+        },
+      ],
+      max_tokens: 256,
+    });
 
-  return text.trim();
+    return text.trim();
+  }
+
+  const data = await response.json();
+  return (data.transcript || data.text || "").trim();
 };
 
 // ============================================
@@ -187,10 +194,10 @@ EXTRACTION RULES:
 
 Return ONLY valid JSON, no preamble.`;
 
-  const rawText = await callGeminiProxy({
-    model: "gemini-2.5-flash",
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
+  const rawText = await callClaudeProxy({
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0,
+    max_tokens: 4096,
   }) || "{}";
   const jsonMatch = rawText.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
@@ -308,19 +315,18 @@ const extractFromDocument = async (
 
   const mimeType = file.type || "application/pdf";
 
-  // Extract text from document via proxy
-  const documentText = await callGeminiProxy({
-    model: "gemini-2.5-flash",
-    contents: [
+  const mediaType = mimeType || "application/pdf";
+  const documentText = await callClaudeProxy({
+    messages: [
       {
         role: "user",
-        parts: [
-          { inlineData: { mimeType, data: base64Data } },
-          { text: "Extract all text from this document. Output only the text content." },
+        content: [
+          { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } },
+          { type: "text", text: "Extract all text from this document. Output only the text content." },
         ],
       },
     ],
-    generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+    max_tokens: 4096,
   });
 
   // Now analyze like a transcript

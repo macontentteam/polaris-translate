@@ -16,35 +16,31 @@ import {
 } from "./types";
 
 // ============================================
-// GEMINI PROXY HELPER
+// CLAUDE PROXY HELPER
 // ============================================
-// All Gemini calls route through the Netlify edge function proxy.
-// Edge functions get 30s timeout vs 10s for serverless functions.
+// All Claude calls route through the Netlify serverless function proxy.
 // The API key lives server-side only; the client never sees it.
 
-const GEMINI_PROXY_URL = "/api/gemini-proxy";
+const CLAUDE_PROXY_URL = "/api/claude-proxy";
 
-interface GeminiProxyRequest {
+interface ClaudeProxyRequest {
   model?: string;
-  contents: any;
-  generationConfig?: Record<string, any>;
-  systemInstruction?: any;
+  messages: Array<{ role: string; content: string | any[] }>;
+  max_tokens?: number;
+  system?: string;
+  temperature?: number;
 }
 
-interface GeminiProxyResponse {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string }>;
-    };
-  }>;
-  error?: { message?: string };
+interface ClaudeProxyResponse {
+  text?: string;
+  error?: string;
 }
 
-const callGeminiProxy = async (
-  request: GeminiProxyRequest,
+const callClaudeProxy = async (
+  request: ClaudeProxyRequest,
   retries = 1,
-  timeoutMs = 28000
-): Promise<{ text: string; raw: GeminiProxyResponse }> => {
+  timeoutMs = 55000
+): Promise<{ text: string; raw: ClaudeProxyResponse }> => {
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -52,7 +48,7 @@ const callGeminiProxy = async (
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      const response = await fetch(GEMINI_PROXY_URL, {
+      const response = await fetch(CLAUDE_PROXY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
@@ -63,26 +59,24 @@ const callGeminiProxy = async (
 
       if (!response.ok) {
         const errText = await response.text().catch(() => "Unknown error");
-        throw new Error(`Gemini proxy error (${response.status}): ${errText}`);
+        throw new Error(`Claude proxy error (${response.status}): ${errText}`);
       }
 
-      const data: GeminiProxyResponse = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const data: ClaudeProxyResponse = await response.json();
+      const text = data.text || "";
       return { text, raw: data };
     } catch (err: any) {
       lastError = err;
-      // Only retry on timeout or 504; don't retry on 4xx errors
       const isRetryable = err.name === "AbortError" || (err.message && err.message.includes("504"));
       if (!isRetryable || attempt >= retries) break;
-      // Brief pause before retry
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
   if (lastError?.name === "AbortError") {
-    throw new Error("Gemini request timed out. The translation may be too long; try shorter text or a simpler prompt.");
+    throw new Error("Claude request timed out. The translation may be too long; try shorter text or a simpler prompt.");
   }
-  throw lastError || new Error("Gemini proxy call failed");
+  throw lastError || new Error("Claude proxy call failed");
 };
 
 // ============================================
@@ -238,15 +232,15 @@ export const verifyOpenAIConnection = async () => {
   }
 };
 
-export const verifyGeminiConnection = async () => {
+export const verifyClaudeConnection = async () => {
   try {
-    await callGeminiProxy({
-      model: "gemini-2.5-flash",
-      contents: [{ role: "user", parts: [{ text: "OK" }] }],
+    await callClaudeProxy({
+      messages: [{ role: "user", content: "OK" }],
+      max_tokens: 10,
     });
-    return { success: true, message: "Gemini connected" };
+    return { success: true, message: "Claude connected" };
   } catch {
-    return { success: false, message: "Gemini connection failed" };
+    return { success: false, message: "Claude connection failed" };
   }
 };
 
@@ -260,18 +254,18 @@ const extractTextFromFile = async (file: File, onProgress: (s: string, d?: strin
   const base64Data = await fileToBase64(file);
   onProgress("ingesting", `Processing ${file.name}...`);
 
-  const { text } = await callGeminiProxy({
-    model: "gemini-2.5-flash",
-    contents: [
+  const mediaType = mimeType || "application/octet-stream";
+  const { text } = await callClaudeProxy({
+    messages: [
       {
         role: "user",
-        parts: [
-          { inlineData: { mimeType: mimeType || "application/octet-stream", data: base64Data } },
-          { text: "Extract or transcribe all text from this file." },
+        content: [
+          { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } },
+          { type: "text", text: "Extract or transcribe all text from this file." },
         ],
       },
     ],
-    generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+    max_tokens: 4096,
   });
 
   return { text, originalFormat: text, contentType };
@@ -280,7 +274,7 @@ const extractTextFromFile = async (file: File, onProgress: (s: string, d?: strin
 // ============================================
 // CULTURAL ANALYSIS (GENERAL AI INSTRUCTION)
 // ============================================
-// This is written to be model-agnostic (works with Gemini, GPT, etc.).
+// This is written to be model-agnostic.
 const buildCulturalAnalysisPrompt = (targetCulture: string, sourceText: string) => {
   return `You are a localization risk analyst. Analyze the content for cultural sensitivity and localization risks for ${targetCulture}.
 Return STRICT JSON ONLY with this schema:
@@ -318,10 +312,10 @@ const performTextCulturalAnalysis = async (
   const prompt = buildCulturalAnalysisPrompt(targetCulture, sourceText.substring(0, 6000));
 
   try {
-    const { text: responseText } = await callGeminiProxy({
-      model: "gemini-2.5-flash",
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
+    const { text: responseText } = await callClaudeProxy({
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 4096,
+      temperature: 0,
     });
 
     const raw = responseText || "{}";
@@ -777,7 +771,7 @@ const runConsensusLoop = async (
   let feedbackForRetry = "";
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
-    // --- STEP 1: Gemini translates ---
+    // --- STEP 1: Claude translates ---
     const retryInstruction = feedbackForRetry
       ? `\n\u2550\u2550\u2550 REVISION INSTRUCTIONS (from auditor feedback) \u2550\u2550\u2550\n${feedbackForRetry}\nFix ALL listed issues in this revision.\n\u2550\u2550\u2550 END REVISION \u2550\u2550\u2550\n`
       : "";
@@ -812,13 +806,10 @@ SOURCE TEXT:
 
 Provide ONLY the ${target} translation. No preamble, no explanations, no notes.`;
 
-    const { text: translationText } = await callGeminiProxy({
-      model: "gemini-2.5-flash",
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: AI_TEMPERATURE,
-        thinkingConfig: { thinkingBudget: 0 },
-      },
+    const { text: translationText } = await callClaudeProxy({
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 4096,
+      temperature: AI_TEMPERATURE,
     });
 
     currentTranslation = translationText?.trim() || "";
@@ -1162,10 +1153,10 @@ Return STRICT JSON only in this schema:
   });
 
   try {
-    const { text: responseText } = await callGeminiProxy({
-      model: "gemini-2.5-flash",
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
+    const { text: responseText } = await callClaudeProxy({
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 2048,
+      temperature: 0,
     });
 
     const responseStr = responseText || "{}";

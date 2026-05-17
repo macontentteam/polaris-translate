@@ -374,7 +374,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
 
     // ============================================
     // DEMO MODE: simulate the full extraction + commit flow without ever
-    // hitting Gemini or R2. Visitors get the same visual journey but no
+    // hitting Claude or R2. Visitors get the same visual journey but no
     // real data is touched.
     // ============================================
     if (IS_DEMO) {
@@ -404,7 +404,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
       setQueue(prev => prev.map(f => f.id === item.id ? { ...f, status: 'uploading' as const, progress: 20 } : f));
 
       try {
-        // Step 1: Extract knowledge using Gemini (via proxy)
+        // Step 1: Extract knowledge using Claude (via proxy)
         setQueue(prev => prev.map(f => f.id === item.id ? { ...f, status: 'processing' as const, progress: 40 } : f));
 
         const extractionResult = await extractKnowledgeFromFile(
@@ -572,7 +572,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
           <Info className="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" />
           <div>
             <p className="text-blue-300 text-sm font-medium leading-relaxed">
-              Uploaded content is analyzed by Gemini to extract patterns, terminology, and preferences. These insights feed directly into the{' '}
+              Uploaded content is analyzed by Claude to extract patterns, terminology, and preferences. These insights feed directly into the{' '}
               <strong className="text-blue-200">{targetLanguage}</strong> knowledge base, improving glossary accuracy, cultural calibration, and tone matching for every future translation.
             </p>
           </div>

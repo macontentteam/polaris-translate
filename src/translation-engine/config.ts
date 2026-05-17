@@ -1,9 +1,8 @@
 // -- CONFIGURATION KEYRING --
-// Gemini calls now route through /api/gemini-proxy (edge function, 30s timeout).
-// The GEMINI key is intentionally removed from the client bundle.
-// NEVER hardcode API keys in source files.
+// Claude calls route through /api/claude-proxy (serverless function, 60s timeout).
+// API keys live server-side only. NEVER hardcode in source files.
 
 export const KEYS = {
-    GEMINI_PROXY: '/api/gemini-proxy',
-    BUCKET: 'translation-engine-vault'
+    CLAUDE_PROXY: '/api/claude-proxy',
+    R2_PUBLIC: 'https://pub-3907c38bb1b4451db0ac41139e7ac3c0.r2.dev',
 };

@@ -20,7 +20,7 @@ import {
 import { ResultViewer } from './ResultViewer';
 import {
   processLocalization,
-  verifyGeminiConnection,
+  verifyClaudeConnection,
   verifyOpenAIConnection,
   lookupWord,
   getHistory,
@@ -347,7 +347,7 @@ const LandingPage: React.FC<{ onNavigateToTool: () => void }> = ({ onNavigateToT
               One mission.
             </h2>
             <p className="text-lg md:text-xl text-neutral-400 font-medium leading-relaxed max-w-[500px]">
-              Gemini translates. ChatGPT verifies. Together, they achieve what neither could alone.
+              Claude translates. ChatGPT verifies. Together, they achieve what neither could alone.
             </p>
           </div>
         </div>
@@ -366,7 +366,7 @@ const LandingPage: React.FC<{ onNavigateToTool: () => void }> = ({ onNavigateToT
           <div className="space-y-6">
             {[
               { num: '01', title: 'Upload anything', desc: 'Text, documents, video, audio. Our engine extracts and processes it all.' },
-              { num: '02', title: 'Intelligent translation', desc: 'Gemini translates with full context awareness, applying industry glossaries and cultural rules.' },
+              { num: '02', title: 'Intelligent translation', desc: 'Claude translates with full context awareness, applying industry glossaries and cultural rules.' },
               { num: '03', title: 'Back-translation check', desc: 'The translation is converted back to English. If meaning drifted, we catch it.' },
               { num: '04', title: 'GPT-5.2 audit', desc: 'Every word is scrutinized. Terminology, tone, accuracy-nothing escapes review.' },
               { num: '05', title: 'Consensus or iterate', desc: 'If both models agree: ship it. If not: revise and retry. Up to 3 rounds until perfect.' },
@@ -514,7 +514,7 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
   const [processingDetail, setProcessingDetail] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, LocalizationResult> | null>(null);
-  const [geminiStatus, setGeminiStatus] = useState<'connected' | 'disconnected' | 'testing'>('testing');
+  const [claudeStatus, setClaudeStatus] = useState<'connected' | 'disconnected' | 'testing'>('testing');
   const [openaiStatus, setOpenaiStatus] = useState<'connected' | 'disconnected' | 'testing'>('testing');
   const [dictionaryLookup, setDictionaryLookup] = useState<DictionaryLookup | null>(null);
   const [showDictionary, setShowDictionary] = useState(false);
@@ -555,8 +555,8 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
 
   useEffect(() => {
     const test = async () => {
-      const g = await verifyGeminiConnection();
-      setGeminiStatus(g.success ? 'connected' : 'disconnected');
+      const g = await verifyClaudeConnection();
+      setClaudeStatus(g.success ? 'connected' : 'disconnected');
       const o = await verifyOpenAIConnection();
       setOpenaiStatus(o.success ? 'connected' : 'disconnected');
     };
@@ -824,7 +824,7 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
           <div className="flex items-center gap-2 sm:gap-6">
             {/* Status dots, always visible but compact on mobile */}
             <div className="flex items-center gap-3 sm:gap-6 px-3 sm:px-6 py-2 bg-white/5 rounded-full border border-white/10">
-              <StatusDot status={geminiStatus} label="Gemini" />
+              <StatusDot status={claudeStatus} label="Claude" />
               <StatusDot status={openaiStatus} label="OpenAI" />
             </div>
             {/* Desktop-only toolbar buttons */}

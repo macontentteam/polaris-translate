@@ -6,15 +6,15 @@
 [functions]
   node_bundler = "esbuild"
 
-[functions."gemini-proxy"]
+[functions."claude-proxy"]
   timeout = 60
 
 [functions."openai-audit"]
   timeout = 60
 
 [[redirects]]
-  from = "/api/gemini-proxy"
-  to = "/.netlify/functions/gemini-proxy"
+  from = "/api/claude-proxy"
+  to = "/.netlify/functions/claude-proxy"
   status = 200
 
 [[redirects]]
