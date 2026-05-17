@@ -568,50 +568,6 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({
         </button>
       </div>
 
-      {/* === APPROVAL BANNER === */}
-      <div className={`px-6 py-5 border-b-2 ${
-        isApproved
-          ? 'bg-emerald-50 border-emerald-200'
-          : 'bg-amber-50 border-amber-200'
-      }`}>
-        <div className="flex items-center justify-between max-w-4xl mx-auto">
-          <div className="flex items-center gap-4">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-              isApproved ? 'bg-emerald-500' : 'bg-amber-400'
-            }`}>
-              {isApproved
-                ? <CheckCircle className="w-5 h-5 text-white" />
-                : <Pencil className="w-5 h-5 text-white" />
-              }
-            </div>
-            <div>
-              <p className={`text-base font-bold ${isApproved ? 'text-emerald-800' : 'text-amber-800'}`}>
-                {isApproved ? 'Approved for Training' : 'Draft - Not Yet Approved'}
-              </p>
-              <p className={`text-sm ${isApproved ? 'text-emerald-600' : 'text-amber-600'}`}>
-                {isApproved
-                  ? 'This translation will be used to improve future results.'
-                  : 'Review the translation, make edits if needed, then approve for training.'}
-              </p>
-            </div>
-          </div>
-          {!isApproved && onApprove && (
-            <button
-              onClick={() => onApprove(content, targetLanguage)}
-              className="flex items-center gap-2 px-6 py-3 text-base font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-sm"
-            >
-              <CheckCircle className="w-5 h-5" />
-              Approve for Training
-            </button>
-          )}
-          {isApproved && (
-            <span className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-emerald-700 bg-emerald-100 rounded-full">
-              <CheckCircle className="w-4 h-4" />
-              Approved
-            </span>
-          )}
-        </div>
-      </div>
 
       {/* Tab Content */}
       <div className="p-8">

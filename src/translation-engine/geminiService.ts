@@ -1092,17 +1092,26 @@ export const processLocalization = async (
 
     const segments = generateSegments(originalFormat, consensus.finalTranslation);
 
+    const hasCulturalBlockers = culturalAnalysis.overallRiskLevel === "review-required" || culturalAnalysis.highSeverityCount > 0;
+    const passesScore = consensus.finalScore >= PASS_THRESHOLD;
+    const overallStatus = (passesScore && !hasCulturalBlockers) ? "PASS" : "FAIL";
+
+    let auditorNotes = consensus.whyNotPerfect || "Translation complete";
+    if (hasCulturalBlockers && passesScore) {
+      auditorNotes = `Cultural review required: ${culturalAnalysis.highSeverityCount} high-severity cultural issue(s) flagged. ${culturalAnalysis.summary || ""}`.trim();
+    }
+
     const res: LocalizationResult = {
       id: generateId(),
       finalScript: consensus.finalTranslation,
       originalFormat,
       segments,
       back_translation_full: consensus.finalBackTranslation,
-      cultural_audit: [], // legacy placeholder
-      culturalAnalysis, // (ok) this powers your cultural tab + report
+      cultural_audit: [],
+      culturalAnalysis,
       verification: {
-        status: consensus.finalScore >= PASS_THRESHOLD ? "PASS" : "FAIL",
-        auditorNotes: consensus.whyNotPerfect || "Translation complete",
+        status: overallStatus,
+        auditorNotes,
         auditorModel: "GPT-5.2 (Consensus)",
         technical_accuracy_score: consensus.finalScore,
       },
