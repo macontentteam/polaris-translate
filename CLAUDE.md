@@ -8,8 +8,8 @@ Polaris Global Translation Engine, the standalone version. Forked from the portf
 - **API Proxies**: Three Netlify serverless functions in `netlify/functions/`:
   - `gemini-proxy.js` - Proxies to Gemini 2.5 Flash for translation
   - `openai-audit.js` - Proxies to OpenAI GPT-4o for quality audit
-  - `gcs-upload.js` - Proxies to Google Cloud Storage for knowledge base uploads
-- **Knowledge Base**: Shared GCS bucket `translation-engine-vault` (also used by portfolio demo)
+  - `kb-upload.js` - Proxies to Cloudflare R2 for knowledge base uploads
+- **Knowledge Base**: Cloudflare R2 bucket `polaris-knowledge-base`, public read via r2.dev
 - **No routing library**: Single-page app, view state managed via React useState
 
 ## Deployment
@@ -17,7 +17,7 @@ Polaris Global Translation Engine, the standalone version. Forked from the portf
 - **Netlify**: `global-translation-engine` site on macontentteam account
 - **Deploy method**: Push to `main` triggers auto-deploy
 - **Auth**: Netlify password protection (configured in dashboard)
-- **Env vars on Netlify**: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `GCS_SERVICE_ACCOUNT_KEY`
+- **Env vars on Netlify**: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
 - **Dev server**: `npm run dev` on port 3010, `npm run dev:netlify` for local function testing
 
 ## Important

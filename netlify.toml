@@ -23,8 +23,8 @@
   status = 200
 
 [[redirects]]
-  from = "/api/gcs-upload"
-  to = "/.netlify/functions/gcs-upload"
+  from = "/api/kb-upload"
+  to = "/.netlify/functions/kb-upload"
   status = 200
 
 [[redirects]]

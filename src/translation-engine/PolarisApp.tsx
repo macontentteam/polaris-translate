@@ -776,14 +776,13 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
       culturalFlags: approvedContent.culturalAnalysis?.items?.length || 0,
     };
 
-    // Save to localStorage as backup, then flush to GCS
+    // Save to localStorage as backup, then flush to R2
     try {
       const queue = JSON.parse(localStorage.getItem('te_approval_queue') || '[]');
       queue.push(trainingRecord);
       localStorage.setItem('te_approval_queue', JSON.stringify(queue));
 
-      // Flush to GCS via the gcs-upload serverless function
-      fetch('/api/gcs-upload', {
+      fetch('/api/kb-upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -794,7 +793,6 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
       })
         .then((res) => {
           if (res.ok) {
-            // Remove the flushed record from localStorage queue
             try {
               const currentQueue = JSON.parse(localStorage.getItem('te_approval_queue') || '[]');
               const filtered = currentQueue.filter((r: any) => r.id !== trainingRecord.id);
@@ -802,7 +800,7 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
             } catch { /* ignore cleanup errors */ }
           }
         })
-        .catch(() => { /* GCS flush failed; record stays in localStorage for retry */ });
+        .catch(() => {});
     } catch { /* localStorage full - ignore for now */ }
 
     // Mark in history metadata

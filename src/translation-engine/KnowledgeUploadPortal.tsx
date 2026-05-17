@@ -20,13 +20,12 @@ import {
 } from 'lucide-react';
 import { extractKnowledgeFromFile, generateMergePreview, type ExtractionResult } from './knowledgeExtractor';
 
-// GCS Upload proxy endpoint
-const GCS_UPLOAD_URL = '/api/gcs-upload';
+// Knowledge base upload proxy endpoint (Cloudflare R2)
+const KB_UPLOAD_URL = '/api/kb-upload';
 
 const IS_DEMO = false;
 
 // Hardcoded sample extraction shown to public visitors in demo mode.
-// Realistic-looking but fully fake. Never touches GCS.
 const DEMO_SAMPLE_EXTRACTION: ExtractionResult = {
   glossary: [
     { source: 'wolf', target: 'Wolf', context: 'brand term, never translate', confidence: 1.0 },
@@ -64,7 +63,7 @@ interface UploadCard {
   acceptLabel: string;
   extractionValue: string[];
   color: string;
-  gcsFolderPath: string;
+  uploadFolder: string;
 }
 
 interface QueuedFile {
@@ -96,7 +95,7 @@ const UPLOAD_CARDS: UploadCard[] = [
     acceptLabel: 'MP3, WAV, M4A',
     extractionValue: ['Idioms & colloquialisms', 'Natural pacing & cadence', 'Pronunciation patterns', 'Regional dialect markers'],
     color: '#6366f1',
-    gcsFolderPath: 'uploads/audio',
+    uploadFolder: 'uploads/audio',
   },
   {
     id: 'srt',
@@ -108,7 +107,7 @@ const UPLOAD_CARDS: UploadCard[] = [
     acceptLabel: 'SRT, VTT, SUB',
     extractionValue: ['Line length preferences', 'Reading speed norms', 'Segment break patterns', 'Abbreviation conventions'],
     color: '#0ea5e9',
-    gcsFolderPath: 'uploads/srt',
+    uploadFolder: 'uploads/srt',
   },
   {
     id: 'documents',
@@ -120,7 +119,7 @@ const UPLOAD_CARDS: UploadCard[] = [
     acceptLabel: 'PDF, DOCX, TXT, MD, RTF',
     extractionValue: ['Terminology in context', 'Sentence structure', 'Formality registers', 'Industry-specific phrasing'],
     color: '#10b981',
-    gcsFolderPath: 'uploads/documents',
+    uploadFolder: 'uploads/documents',
   },
   {
     id: 'video',
@@ -132,7 +131,7 @@ const UPLOAD_CARDS: UploadCard[] = [
     acceptLabel: 'MP4, MOV, AVI, WebM (max 30MB)',
     extractionValue: ['Speech cadence', 'Regional accents', 'Visual context cues', 'Tone & delivery style'],
     color: '#f59e0b',
-    gcsFolderPath: 'uploads/video',
+    uploadFolder: 'uploads/video',
   },
   {
     id: 'approved',
@@ -144,7 +143,7 @@ const UPLOAD_CARDS: UploadCard[] = [
     acceptLabel: 'TXT, DOCX, SRT, CSV',
     extractionValue: ['Approved terminology', 'Preferred phrasing', 'Tone benchmarks', 'Structural patterns'],
     color: '#22c55e',
-    gcsFolderPath: 'uploads/approved',
+    uploadFolder: 'uploads/approved',
   },
   {
     id: 'rejected',
@@ -156,7 +155,7 @@ const UPLOAD_CARDS: UploadCard[] = [
     acceptLabel: 'TXT, DOCX, SRT, CSV',
     extractionValue: ['Common mistakes', 'Reviewer corrections', 'Banned phrasings', 'Tone violations'],
     color: '#ef4444',
-    gcsFolderPath: 'uploads/rejected',
+    uploadFolder: 'uploads/rejected',
   },
 ];
 
@@ -304,9 +303,9 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
     setQueue(prev => prev.filter(f => f.status !== 'complete' && f.status !== 'error'));
   };
 
-  // Commit a single extraction result to GCS knowledge base.
+  // Commit a single extraction result to the knowledge base.
   // In demo mode this is a no-op that just marks the item as "committed"
-  // without ever touching GCS, so visitors see the full UX.
+  // without ever touching storage, so visitors see the full UX.
   const commitToKnowledgeBase = async (item: QueuedFile) => {
     if (!item.extractionResult) return;
 
@@ -323,7 +322,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
     setQueue(prev => prev.map(f => f.id === item.id ? { ...f, commitStatus: 'committing' as const } : f));
 
     try {
-      const response = await fetch(GCS_UPLOAD_URL, {
+      const response = await fetch(KB_UPLOAD_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -361,7 +360,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
     }
   };
 
-  // Commit all completed extractions to GCS
+  // Commit all completed extractions to R2
   const commitAllToKnowledgeBase = async () => {
     const completedUncommitted = queue.filter(f => f.status === 'complete' && !f.committed && f.extractionResult);
     for (const item of completedUncommitted) {
@@ -375,7 +374,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
 
     // ============================================
     // DEMO MODE: simulate the full extraction + commit flow without ever
-    // hitting Gemini or GCS. Visitors get the same visual journey but no
+    // hitting Gemini or R2. Visitors get the same visual journey but no
     // real data is touched.
     // ============================================
     if (IS_DEMO) {
@@ -419,13 +418,13 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
           }
         );
 
-        // Step 2: Auto-commit extracted knowledge to GCS
+        // Step 2: Auto-commit extracted knowledge to R2
         setQueue(prev => prev.map(f => f.id === item.id ? { ...f, progress: 80, extractedInsights: 'Committing to knowledge base...' } : f));
 
         let commitResult = undefined;
         let committed = false;
         try {
-          const commitResponse = await fetch(GCS_UPLOAD_URL, {
+          const commitResponse = await fetch(KB_UPLOAD_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

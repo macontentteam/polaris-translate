@@ -89,7 +89,7 @@ const callGeminiProxy = async (
 // CONFIGURATION
 // ============================================
 
-const GCS_BUCKET_NAME = "translation-engine-vault";
+const R2_PUBLIC_URL = "https://pub-3907c38bb1b4451db0ac41139e7ac3c0.r2.dev";
 const OPENAI_PROXY_URL = "/api/openai-audit";
 const PASS_THRESHOLD = 95;
 
@@ -198,8 +198,7 @@ const loadKnowledgeBase = async (languageDisplay: string, mode: TranslationMode)
   const folderName = LANGUAGE_TO_FOLDER_MAP[languageDisplay];
   if (!folderName) return getEmptyKnowledgeBase(languageDisplay);
 
-  // NOTE: Matches your bucket screenshot: kb/<lang>/skill/
-  const baseUrl = `https://storage.googleapis.com/${GCS_BUCKET_NAME}/kb/${folderName}/skill`;
+  const baseUrl = `${R2_PUBLIC_URL}/kb/${folderName}/skill`;
   const files = ["glossary_master.json", "cultural_safeguards.json", "idiom_map.json", "qa_overrides.json", "srt_constraints.json"];
 
   try {

@@ -383,7 +383,7 @@ export const extractKnowledgeFromFile = async (
 };
 
 // ============================================
-// MERGE UTILITIES (for updating GCS files)
+// MERGE UTILITIES
 // ============================================
 
 export const generateMergePreview = (
