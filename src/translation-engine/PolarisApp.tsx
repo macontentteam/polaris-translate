@@ -40,13 +40,11 @@ import {
 } from './types';
 import { KnowledgeUploadPortal } from './KnowledgeUploadPortal';
 
+const R2_ASSETS = 'https://pub-3907c38bb1b4451db0ac41139e7ac3c0.r2.dev/assets';
 const ASSETS = {
-  heroVideo:
-    'https://firebasestorage.googleapis.com/v0/b/blue-peak-poc.firebasestorage.app/o/Translation%20Engine%2FHeros%2FHero%20v2.mp4?alt=media&token=97a83a4e-0b9b-419c-a2b0-f7d014196021',
-  laptopHand:
-    'https://firebasestorage.googleapis.com/v0/b/blue-peak-poc.firebasestorage.app/o/Translation%20Engine%2FHeros%2FLaptop%20and%20hand%20v4.png?alt=media&token=e530ee90-96ba-4b49-a4eb-46c5e3c91bbc',
-  dualIntelligence:
-    'https://firebasestorage.googleapis.com/v0/b/blue-peak-poc.firebasestorage.app/o/Translation%20Engine%2FHeros%2FGemini%20and%20GPT%20Logos%20background.png?alt=media&token=5e772d1a-e69a-4e02-84e7-62eeb4a42572',
+  heroVideo: `${R2_ASSETS}/hero-v2.mp4`,
+  laptopHand: `${R2_ASSETS}/laptop-and-hand-v4.png`,
+  dualIntelligence: `${R2_ASSETS}/gemini-gpt-logos-bg.png`,
 };
 
 // ============================================
