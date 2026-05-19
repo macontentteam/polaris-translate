@@ -31,7 +31,7 @@ const callClaudeProxy = async (request: {
 
 interface GlossaryEntry {
   en: string;
-  de_approved: string;
+  target_approved: string;
   phonetic?: string;
   srt_short?: string;
   note?: string;
@@ -41,7 +41,7 @@ interface GlossaryEntry {
 
 interface IdiomEntry {
   en_idiom: string;
-  de_equivalent: string;
+  target_equivalent: string;
   context?: string;
   application?: string;
   source?: string;
@@ -138,7 +138,7 @@ const extractFromTranscript = async (
 ): Promise<Omit<ExtractionResult, "metadata" | "srt_timing">> => {
   onProgress?.("Extracting glossary terms, idioms, and cultural patterns...");
 
-  const prompt = `You are analyzing a German cybersecurity podcast/audio transcript to extract localization knowledge.
+  const prompt = `You are analyzing a ${targetLanguage} cybersecurity podcast/audio transcript to extract localization knowledge.
 
 TARGET LANGUAGE: ${targetLanguage}
 TRANSCRIPT:
@@ -152,14 +152,14 @@ Extract the following in STRICT JSON format:
   "glossary": [
     {
       "en": "English term (inferred from context)",
-      "de_approved": "Exact German term used in transcript",
+      "target_approved": "Exact ${targetLanguage} term used in transcript",
       "note": "Context of usage",
       "usage_count": number of times this term appears
     }
   ],
   "idioms": [
     {
-      "de_equivalent": "German idiom/expression used",
+      "target_equivalent": "${targetLanguage} idiom/expression used",
       "en_idiom": "English equivalent (best match)",
       "context": "When/how it was used",
       "application": "Professional or casual"
@@ -406,13 +406,13 @@ export const generateMergePreview = (
 } => {
   // Find new vs existing
   const newTerms = extraction.glossary.filter(
-    (newEntry) => !existingGlossary.some((existing) => existing.de_approved === newEntry.de_approved)
+    (newEntry) => !existingGlossary.some((existing) => existing.target_approved === newEntry.target_approved)
   );
   const updatedTerms = extraction.glossary.filter((newEntry) =>
-    existingGlossary.some((existing) => existing.de_approved === newEntry.de_approved)
+    existingGlossary.some((existing) => existing.target_approved === newEntry.target_approved)
   );
   const newIdioms = extraction.idioms.filter(
-    (newEntry) => !existingIdioms.some((existing) => existing.de_equivalent === newEntry.de_equivalent)
+    (newEntry) => !existingIdioms.some((existing) => existing.target_equivalent === newEntry.target_equivalent)
   );
   const newSafeguards = extraction.cultural_safeguards.filter(
     (newEntry) =>
@@ -435,13 +435,13 @@ GLOSSARY TERMS:
 - Existing terms with updates: ${updatedTerms.length}
 
 NEW TERMS SAMPLE (first 10):
-${newTerms.slice(0, 10).map((t) => `  - "${t.en}" → "${t.de_approved}" (used ${t.usage_count || 1}x)`).join("\n")}
+${newTerms.slice(0, 10).map((t) => `  - "${t.en}" → "${t.target_approved}" (used ${t.usage_count || 1}x)`).join("\n")}
 
 IDIOMS:
 - New idioms to add: ${newIdioms.length}
 
 NEW IDIOMS:
-${newIdioms.map((i) => `  - DE: "${i.de_equivalent}" | EN: "${i.en_idiom}"`).join("\n")}
+${newIdioms.map((i) => `  - Target: "${i.target_equivalent}" | EN: "${i.en_idiom}"`).join("\n")}
 
 CULTURAL SAFEGUARDS:
 - New safeguards to add: ${newSafeguards.length}

@@ -186,6 +186,25 @@ const getEmptyKnowledgeBase = (language: string): KnowledgeBase => ({
   },
 });
 
+const normalizeKBFields = (kb: any): void => {
+  if (kb?.entries) {
+    for (const e of kb.entries) {
+      if (e.de_approved && !e.target_approved) { e.target_approved = e.de_approved; delete e.de_approved; }
+    }
+  }
+  if (kb?.idioms) {
+    for (const i of kb.idioms) {
+      if (i.de_equivalent && !i.target_equivalent) { i.target_equivalent = i.de_equivalent; delete i.de_equivalent; }
+      if (i.literal_de && !i.literal_target) { i.literal_target = i.literal_de; delete i.literal_de; }
+    }
+  }
+  if (kb?.qa_updates) {
+    for (const q of kb.qa_updates) {
+      if (q.approved_german && !q.approved_translation) { q.approved_translation = q.approved_german; delete q.approved_german; }
+    }
+  }
+};
+
 const loadKnowledgeBase = async (languageDisplay: string, mode: TranslationMode): Promise<KnowledgeBase> => {
   if (mode === "general") return getEmptyKnowledgeBase(languageDisplay);
 
@@ -203,11 +222,19 @@ const loadKnowledgeBase = async (languageDisplay: string, mode: TranslationMode)
       })
     );
 
+    const glossary = results[0] || getEmptyKnowledgeBase(languageDisplay).glossary;
+    const idiomMap = results[2] || { idioms: [] };
+    const qaOverrides = results[3] || { qa_updates: [], banned_variants: [] };
+
+    normalizeKBFields(glossary);
+    normalizeKBFields(idiomMap);
+    normalizeKBFields(qaOverrides);
+
     return {
-      glossary: results[0] || getEmptyKnowledgeBase(languageDisplay).glossary,
+      glossary,
       cultural_safeguards: results[1] || { safeguards: [] },
-      idiom_map: results[2] || { idioms: [] },
-      qa_overrides: results[3] || { qa_updates: [], banned_variants: [] },
+      idiom_map: idiomMap,
+      qa_overrides: qaOverrides,
       srt_constraints: (results[4] as SRTConstraints) || getEmptyKnowledgeBase(languageDisplay).srt_constraints,
     };
   } catch {
@@ -391,7 +418,7 @@ const buildGlossaryBlock = (kb: KnowledgeBase): string => {
   const entries = kb.glossary?.entries;
   if (!entries?.length) return "";
   const lines = entries.slice(0, 80).map(
-    (e: any) => `"${e.en}" \u2192 "${e.de_approved}"${e.note ? ` (${e.note.split(".")[0]})` : ""}`
+    (e: any) => `"${e.en}" \u2192 "${e.target_approved}"${e.note ? ` (${e.note.split(".")[0]})` : ""}`
   );
   return `\n\u2550\u2550\u2550 COMPANY GLOSSARY (Preferred translations for key terms) \u2550\u2550\u2550
 ${lines.join("\n")}
@@ -402,7 +429,7 @@ const buildIdiomBlock = (kb: KnowledgeBase): string => {
   const idioms = kb.idiom_map?.idioms;
   if (!idioms?.length) return "";
   const lines = idioms.map(
-    (i: any) => `"${i.en_idiom}" \u2192 "${i.de_equivalent}" (${i.application || ""})`
+    (i: any) => `"${i.en_idiom}" \u2192 "${i.target_equivalent}" (${i.application || ""})`
   );
   return `\n\u2550\u2550\u2550 IDIOM MAP (Use these cultural equivalents, NOT literal translations) \u2550\u2550\u2550
 ${lines.join("\n")}
@@ -529,7 +556,7 @@ const buildGlossaryChecklist = (kb: KnowledgeBase, sourceText: string): string =
   if (!entries?.length) return "";
   // Sort by length descending (compound terms first)
   const sorted = [...entries]
-    .filter((e: any) => e.en && e.de_approved)
+    .filter((e: any) => e.en && e.target_approved)
     .sort((a: any, b: any) => b.en.length - a.en.length);
   const matched = new Set<string>();
   const relevant: any[] = [];
@@ -545,7 +572,7 @@ const buildGlossaryChecklist = (kb: KnowledgeBase, sourceText: string): string =
   }
   if (!relevant.length) return "";
   const lines = relevant.map(
-    (e: any) => `- "${e.en}" -> preferred: "${e.de_approved}"`
+    (e: any) => `- "${e.en}" -> preferred: "${e.target_approved}"`
   );
   return `\nGLOSSARY TERMS FOUND IN SOURCE (preferred translations):\n${lines.join("\n")}\n`;
 };
@@ -850,7 +877,7 @@ Provide ONLY the ${target} translation. No preamble, no explanations, no notes.`
     // Check glossary terms - INFORMATIONAL ONLY (noted for the AI reviewer)
     if (kb.glossary?.entries?.length) {
       const sortedEntries = [...kb.glossary.entries]
-        .filter((e: any) => e.en && e.de_approved)
+        .filter((e: any) => e.en && e.target_approved)
         .sort((a: any, b: any) => b.en.length - a.en.length);
       const matchedSourceTerms = new Set<string>();
 
@@ -866,14 +893,14 @@ Provide ONLY the ${target} translation. No preamble, no explanations, no notes.`
         if (!termRegex.test(sourceNorm)) continue;
         matchedSourceTerms.add(termUpper);
 
-        const deApproved = entry.de_approved.normalize("NFC");
-        const deRegex = new RegExp(deApproved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-        if (!deRegex.test(translationNorm)) {
+        const targetApproved = entry.target_approved.normalize("NFC");
+        const targetRegex = new RegExp(targetApproved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        if (!targetRegex.test(translationNorm)) {
           glossaryNotes.push({
             location: `Term: "${entry.en}"`,
-            issue: `Glossary preference: "${entry.en}" preferred as "${entry.de_approved}" (alternative used)`,
+            issue: `Glossary preference: "${entry.en}" preferred as "${entry.target_approved}" (alternative used)`,
             current: "Different translation used",
-            suggested: entry.de_approved,
+            suggested: entry.target_approved,
             severity: "info",
           });
         }

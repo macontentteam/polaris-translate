@@ -941,7 +941,7 @@ const QueueSidebar: React.FC<{
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1">
                             <div className="text-neutral-400">{term.en || '--'}</div>
-                            <div className="text-white font-medium mt-0.5">{term.de_approved}</div>
+                            <div className="text-white font-medium mt-0.5">{term.target_approved}</div>
                             {term.note && <div className="text-xs text-neutral-500 mt-1">{term.note}</div>}
                           </div>
                           {term.usage_count && term.usage_count > 1 && (

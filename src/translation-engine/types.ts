@@ -55,7 +55,7 @@ export interface GlossaryFile {
 
 export interface GlossaryEntry {
   en: string;
-  de_approved: string;
+  target_approved: string;
   phonetic?: string;
   srt_short?: string;
   note?: string;
@@ -89,14 +89,14 @@ export interface CulturalSafeguard {
 
 export interface IdiomMapping {
   en_idiom: string;
-  de_equivalent: string;
-  literal_de: string;
+  target_equivalent: string;
+  literal_target: string;
   application: string;
 }
 
 export interface QAOverride {
   english_original: string;
-  approved_german: string;
+  approved_translation: string;
   date_added: string;
   source: string;
 }

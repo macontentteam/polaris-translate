@@ -170,7 +170,7 @@ function mergeGlossary(existing, newTerms) {
   const existingMap = new Map();
 
   for (let i = 0; i < merged.length; i++) {
-    const key = (merged[i].de_approved || "").toLowerCase().trim();
+    const key = (merged[i].target_approved || "").toLowerCase().trim();
     if (key) existingMap.set(key, i);
   }
 
@@ -178,8 +178,8 @@ function mergeGlossary(existing, newTerms) {
   let updated = 0;
 
   for (const term of newTerms) {
-    if (!term.de_approved) continue;
-    const key = term.de_approved.toLowerCase().trim();
+    if (!term.target_approved) continue;
+    const key = term.target_approved.toLowerCase().trim();
     if (!key) continue;
 
     if (existingMap.has(key)) {
@@ -210,13 +210,13 @@ function mergeIdioms(existing, newIdioms) {
   const baseArray = extractArray(existing, "idioms", "entries");
   const merged = [...baseArray];
   const existingSet = new Set(
-    merged.map((i) => (i.de_equivalent || "").toLowerCase().trim())
+    merged.map((i) => (i.target_equivalent || "").toLowerCase().trim())
   );
 
   let added = 0;
   for (const idiom of newIdioms) {
-    if (!idiom.de_equivalent) continue;
-    const key = idiom.de_equivalent.toLowerCase().trim();
+    if (!idiom.target_equivalent) continue;
+    const key = idiom.target_equivalent.toLowerCase().trim();
     if (!key || existingSet.has(key)) continue;
 
     merged.push({
