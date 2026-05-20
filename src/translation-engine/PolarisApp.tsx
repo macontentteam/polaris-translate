@@ -33,6 +33,12 @@ import {
   type SRTLocalizationResult
 } from './translationService';
 import {
+  analyzeDialectFromAudio,
+  analyzeDialectFromTranscript,
+  saveDialectProfileToR2,
+  loadExistingDialectProfile,
+} from './dialectService';
+import {
   LocalizationResult,
   TARGET_LANGUAGES,
   TranslationMode,
@@ -40,7 +46,8 @@ import {
   TRANSLATION_MODES,
   FORMALITY_OPTIONS,
   DictionaryLookup,
-  TranslationHistoryItem
+  TranslationHistoryItem,
+  DialectProfile,
 } from './types';
 import { KnowledgeUploadPortal } from './KnowledgeUploadPortal';
 
@@ -530,10 +537,20 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
   const [cardsVisible, setCardsVisible] = useState(false);
   const [srtMode, setSrtMode] = useState(false);
   const [srtResults, setSrtResults] = useState<Record<string, SRTLocalizationResult> | null>(null);
+  const [dialectMode, setDialectMode] = useState(false);
+  const [dialectFile, setDialectFile] = useState<File | null>(null);
+  const [dialectTranscript, setDialectTranscript] = useState('');
+  const [dialectInputMode, setDialectInputMode] = useState<'audio' | 'transcript'>('audio');
+  const [dialectTitle, setDialectTitle] = useState('');
+  const [dialectLanguage, setDialectLanguage] = useState('');
+  const [dialectProfile, setDialectProfile] = useState<DialectProfile | null>(null);
+  const [dialectSaved, setDialectSaved] = useState(false);
+  const [dialectExisting, setDialectExisting] = useState<DialectProfile | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const srtInputRef = useRef<HTMLInputElement>(null);
+  const dialectInputRef = useRef<HTMLInputElement>(null);
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const formalityDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -593,6 +610,14 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
     setDictionaryLookup(null);
     setSrtMode(false);
     setSrtResults(null);
+    setDialectMode(false);
+    setDialectFile(null);
+    setDialectTranscript('');
+    setDialectTitle('');
+    setDialectLanguage('');
+    setDialectProfile(null);
+    setDialectSaved(false);
+    setDialectExisting(null);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -709,6 +734,87 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
     Object.entries(srtResults).forEach(([lang, res]) => {
       setTimeout(() => handleDownloadSRT(lang, res.srtContent), 100);
     });
+  };
+
+  const handleDialectFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setDialectFile(file);
+    if (!dialectTitle) setDialectTitle(file.name.replace(/\.[^/.]+$/, ''));
+  };
+
+  const handleDialectAnalyze = async () => {
+    if (!dialectLanguage) {
+      setError('Select a language for dialect analysis');
+      return;
+    }
+    if (dialectInputMode === 'audio' && !dialectFile) {
+      setError('Upload an audio file for analysis');
+      return;
+    }
+    if (dialectInputMode === 'transcript' && !dialectTranscript.trim()) {
+      setError('Paste a transcript for analysis');
+      return;
+    }
+
+    setIsProcessing(true);
+    setError(null);
+    setDialectProfile(null);
+    setDialectSaved(false);
+
+    try {
+      let profile: DialectProfile;
+      if (dialectInputMode === 'audio' && dialectFile) {
+        profile = await analyzeDialectFromAudio(
+          dialectFile,
+          dialectLanguage,
+          (stage, detail) => {
+            setProcessingStage(stage);
+            setProcessingDetail(detail || '');
+          }
+        );
+      } else {
+        profile = await analyzeDialectFromTranscript(
+          dialectTranscript,
+          dialectLanguage,
+          dialectTitle || 'Untitled',
+          (stage, detail) => {
+            setProcessingStage(stage);
+            setProcessingDetail(detail || '');
+          }
+        );
+      }
+      setDialectProfile(profile);
+    } catch (err: any) {
+      setError(err.message || 'Dialect analysis failed');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDialectSave = async () => {
+    if (!dialectProfile || !dialectLanguage) return;
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+      await saveDialectProfileToR2(dialectProfile, dialectLanguage);
+      setDialectSaved(true);
+    } catch (err: any) {
+      setError(err.message || 'Failed to save dialect profile to R2');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDialectLoadExisting = async () => {
+    if (!dialectLanguage) return;
+    try {
+      const existing = await loadExistingDialectProfile(dialectLanguage);
+      setDialectExisting(existing);
+    } catch {
+      setDialectExisting(null);
+    }
   };
 
   // Keeps your existing lookup logic, but now App passes it the correct target language via wrapper
@@ -1089,25 +1195,156 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
               {(['text', 'documents', 'media'] as const).map((tab) => (
                 <button
                   key={tab}
-                  onClick={() => { setSourceTab(tab); setSrtMode(false); }}
+                  onClick={() => { setSourceTab(tab); setSrtMode(false); setDialectMode(false); }}
                   className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
-                    sourceTab === tab && !srtMode ? 'bg-neutral-900 text-white shadow-lg' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                    sourceTab === tab && !srtMode && !dialectMode ? 'bg-neutral-900 text-white shadow-lg' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                   }`}
                 >
                   {tab}
                 </button>
               ))}
               <button
-                onClick={() => { setSourceTab('documents'); setSrtMode(true); setUploadedFile(null); setExtractedText(''); }}
+                onClick={() => { setSourceTab('documents'); setSrtMode(true); setDialectMode(false); setUploadedFile(null); setExtractedText(''); }}
                 className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
                   srtMode ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
               >
                 SRT
               </button>
+              <button
+                onClick={() => { setDialectMode(true); setSrtMode(false); setUploadedFile(null); setExtractedText(''); }}
+                className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
+                  dialectMode ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/25' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                }`}
+              >
+                Dialect
+              </button>
             </div>
 
-            {srtMode ? (
+            {dialectMode ? (
+              <div className="flex flex-col rounded-2xl border-2 border-purple-200 overflow-hidden" style={{ minHeight: '400px' }}>
+                <div className="px-6 py-4 bg-purple-50 border-b-2 border-purple-200">
+                  <span className="text-lg font-bold text-purple-900 uppercase tracking-wide">Dialect Calibration</span>
+                  <p className="text-sm text-purple-600 mt-1">Analyze native-speaker reference material to build a dialect profile for more natural translations</p>
+                </div>
+                <div className="p-6 bg-white space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-bold text-neutral-700 mb-2 uppercase tracking-wider">Target Language *</label>
+                      <select
+                        value={dialectLanguage}
+                        onChange={(e) => { setDialectLanguage(e.target.value); setDialectExisting(null); }}
+                        className="w-full px-4 py-3 text-base bg-white border-2 border-neutral-200 rounded-xl focus:outline-none focus:border-purple-500 font-medium text-neutral-900"
+                      >
+                        <option value="">Select language...</option>
+                        {TARGET_LANGUAGES.map((lang) => (
+                          <option key={lang} value={lang}>{lang}</option>
+                        ))}
+                      </select>
+                      {dialectLanguage && !dialectExisting && (
+                        <button
+                          onClick={handleDialectLoadExisting}
+                          className="mt-2 text-sm text-purple-600 hover:text-purple-700 font-medium"
+                        >
+                          Check for existing profile
+                        </button>
+                      )}
+                      {dialectExisting && (
+                        <div className="mt-2 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                          <p className="text-sm font-bold text-purple-800">Existing profile found</p>
+                          <p className="text-xs text-purple-600 mt-1">
+                            Analyzed: {dialectExisting.source_material.analyzed_date} | Source: {dialectExisting.source_material.title}
+                          </p>
+                          <p className="text-xs text-purple-500 mt-1">New analysis will replace this profile.</p>
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-neutral-700 mb-2 uppercase tracking-wider">Reference Title</label>
+                      <input
+                        type="text"
+                        value={dialectTitle}
+                        onChange={(e) => setDialectTitle(e.target.value)}
+                        placeholder="e.g. DACH Security Awareness Training"
+                        className="w-full px-4 py-3 text-base bg-white border-2 border-neutral-200 rounded-xl focus:outline-none focus:border-purple-500 font-medium text-neutral-900 placeholder:text-neutral-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex gap-3 mb-4">
+                      {(['audio', 'transcript'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => setDialectInputMode(mode)}
+                          className={`px-5 py-2.5 rounded-xl font-bold text-sm uppercase tracking-wide transition-all ${
+                            dialectInputMode === mode
+                              ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/25'
+                              : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                          }`}
+                        >
+                          {mode === 'audio' ? 'Audio File' : 'Paste Transcript'}
+                        </button>
+                      ))}
+                    </div>
+
+                    {dialectInputMode === 'audio' ? (
+                      <div>
+                        <input
+                          ref={dialectInputRef}
+                          type="file"
+                          accept="audio/mpeg,audio/wav,audio/mp4,audio/ogg,audio/flac,.mp3,.wav,.m4a,.ogg,.flac"
+                          onChange={handleDialectFileUpload}
+                          className="hidden"
+                        />
+                        {dialectFile ? (
+                          <div className="flex items-center gap-4 p-4 bg-purple-50 border-2 border-purple-200 rounded-xl">
+                            <svg className="w-10 h-10 text-purple-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M9 18V5l12-2v13" />
+                              <circle cx="6" cy="18" r="3" />
+                              <circle cx="18" cy="16" r="3" />
+                            </svg>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-neutral-900 truncate">{dialectFile.name}</p>
+                              <p className="text-sm text-neutral-500">{(dialectFile.size / (1024 * 1024)).toFixed(1)} MB</p>
+                            </div>
+                            <button
+                              onClick={() => setDialectFile(null)}
+                              className="text-red-500 hover:text-red-600 font-bold text-sm"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => dialectInputRef.current?.click()}
+                            className="w-full flex flex-col items-center gap-4 p-10 border-4 border-dashed border-purple-300 rounded-2xl hover:border-purple-500 hover:bg-purple-50/50 transition-all"
+                          >
+                            <svg className="w-12 h-12 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M9 18V5l12-2v13" />
+                              <circle cx="6" cy="18" r="3" />
+                              <circle cx="18" cy="16" r="3" />
+                            </svg>
+                            <div className="text-center">
+                              <p className="text-lg font-bold text-neutral-700">Upload audio file</p>
+                              <p className="text-sm text-neutral-500 mt-1">MP3, WAV, M4A, OGG, FLAC</p>
+                            </div>
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <textarea
+                        value={dialectTranscript}
+                        onChange={(e) => setDialectTranscript(e.target.value)}
+                        placeholder="Paste a transcript of a native speaker discussing cybersecurity topics. The more natural speech patterns present, the better the dialect profile will be."
+                        className="w-full px-4 py-3 border-2 border-neutral-200 rounded-xl focus:outline-none focus:border-purple-500 text-base resize-none font-mono text-neutral-900 placeholder:text-neutral-400"
+                        rows={8}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : srtMode ? (
               <div className="flex flex-col rounded-2xl border-2 border-blue-200 overflow-hidden" style={{ minHeight: '400px' }}>
                 <div className="px-6 py-4 bg-blue-50 border-b-2 border-blue-200 flex items-center justify-between">
                   <div>
@@ -1292,7 +1529,29 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
               </div>
             )}
 
-            {srtMode ? (
+            {dialectMode ? (
+              !dialectProfile && (
+                <div className="mt-12 flex justify-center">
+                  <button
+                    onClick={handleDialectAnalyze}
+                    disabled={isProcessing || !dialectLanguage || (dialectInputMode === 'audio' ? !dialectFile : !dialectTranscript.trim())}
+                    className="px-12 py-5 bg-purple-600 hover:bg-purple-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-black text-lg rounded-full transition-all flex items-center gap-3 shadow-2xl shadow-purple-600/20 hover:scale-105 disabled:hover:scale-100 uppercase tracking-wide"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-7 h-7 animate-spin" />
+                        {processingStage === 'encoding' ? 'Encoding...' : processingStage === 'analyzing' ? 'Analyzing...' : 'Processing...'}
+                      </>
+                    ) : (
+                      <>
+                        Analyze Dialect
+                        <ArrowRight className="w-7 h-7" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              )
+            ) : srtMode ? (
               !srtResults && (
                 <div className="mt-12 flex justify-center">
                   <button
@@ -1520,6 +1779,246 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dialectProfile && (
+        <div className="bg-gradient-to-br from-purple-50 to-white py-16">
+          <div className="max-w-6xl mx-auto px-4 sm:px-8">
+            <div className="flex items-center justify-between mb-10">
+              <div>
+                <h2 className="text-3xl font-black text-neutral-900 uppercase tracking-tight">Dialect Profile</h2>
+                <p className="text-neutral-500 mt-2">
+                  {dialectProfile.language} | Source: {dialectProfile.source_material.title} | Analyzed: {dialectProfile.source_material.analyzed_date}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                {dialectSaved ? (
+                  <span className="px-5 py-2.5 bg-emerald-100 text-emerald-700 font-bold text-sm rounded-full flex items-center gap-2">
+                    <Check className="w-4 h-4" />
+                    Saved to R2
+                  </span>
+                ) : (
+                  <button
+                    onClick={handleDialectSave}
+                    disabled={isProcessing}
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-neutral-300 text-white font-bold rounded-full transition-all flex items-center gap-2 shadow-lg"
+                  >
+                    {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
+                    Save to R2
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    const json = JSON.stringify(dialectProfile, null, 2);
+                    const blob = new Blob([json], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `dialect_profile_${dialectProfile.language.toLowerCase().replace(/[^a-z]/g, '-')}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="px-6 py-3 bg-neutral-200 hover:bg-neutral-300 text-neutral-800 font-bold rounded-full transition-all flex items-center gap-2"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  Download JSON
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {/* Pacing */}
+              <div className="bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden shadow-lg">
+                <div className="px-6 py-4 bg-neutral-50 border-b border-neutral-200">
+                  <h3 className="text-lg font-black text-neutral-900 uppercase tracking-tight">Speech Pacing</h3>
+                </div>
+                <div className="p-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+                  {[
+                    { label: 'WPM Avg', value: dialectProfile.pacing.words_per_minute_avg.toString() },
+                    { label: 'WPM Range', value: `${dialectProfile.pacing.words_per_minute_range[0]}-${dialectProfile.pacing.words_per_minute_range[1]}` },
+                    { label: 'Pause Freq', value: dialectProfile.pacing.pause_frequency },
+                    { label: 'Pause Avg', value: `${dialectProfile.pacing.pause_duration_avg_ms}ms` },
+                    { label: 'Sentence Len', value: `${dialectProfile.pacing.sentence_length_avg_words} words` },
+                    { label: 'Preferred CPS', value: dialectProfile.subtitle_pacing.preferred_cps.toString() },
+                  ].map((stat) => (
+                    <div key={stat.label} className="text-center p-3 bg-neutral-50 rounded-xl">
+                      <p className="text-xl font-black text-neutral-800">{stat.value}</p>
+                      <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider mt-1">{stat.label}</p>
+                    </div>
+                  ))}
+                </div>
+                {dialectProfile.pacing.emphasis_pattern && (
+                  <div className="px-6 pb-4">
+                    <p className="text-sm text-neutral-600"><span className="font-bold">Emphasis:</span> {dialectProfile.pacing.emphasis_pattern}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Register */}
+              <div className="bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden shadow-lg">
+                <div className="px-6 py-4 bg-neutral-50 border-b border-neutral-200">
+                  <h3 className="text-lg font-black text-neutral-900 uppercase tracking-tight">Register and Tone</h3>
+                </div>
+                <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {[
+                    { label: 'Formality', value: dialectProfile.register.formality_level },
+                    { label: 'Address Form', value: dialectProfile.register.address_form },
+                    { label: 'Directness', value: dialectProfile.register.directness },
+                    { label: 'Humor', value: dialectProfile.register.humor_frequency },
+                    { label: 'Hedging', value: dialectProfile.register.hedging_language },
+                  ].filter(s => s.value).map((stat) => (
+                    <div key={stat.label} className="p-4 bg-neutral-50 rounded-xl">
+                      <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-1">{stat.label}</p>
+                      <p className="text-base font-medium text-neutral-800">{stat.value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Terminology */}
+              <div className="bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden shadow-lg">
+                <div className="px-6 py-4 bg-neutral-50 border-b border-neutral-200">
+                  <h3 className="text-lg font-black text-neutral-900 uppercase tracking-tight">Terminology in Practice</h3>
+                </div>
+                <div className="p-6 space-y-4">
+                  {dialectProfile.terminology_in_practice.terms_used_as_english_loanwords.length > 0 && (
+                    <div>
+                      <p className="text-sm font-bold text-neutral-700 mb-2 uppercase tracking-wider">English Loanwords (kept as-is)</p>
+                      <div className="flex flex-wrap gap-2">
+                        {dialectProfile.terminology_in_practice.terms_used_as_english_loanwords.map((term, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-blue-50 text-blue-700 text-sm font-medium rounded-lg border border-blue-200">
+                            {term}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {dialectProfile.terminology_in_practice.terms_always_translated.length > 0 && (
+                    <div>
+                      <p className="text-sm font-bold text-neutral-700 mb-2 uppercase tracking-wider">Always Translated</p>
+                      <div className="space-y-2">
+                        {dialectProfile.terminology_in_practice.terms_always_translated.map((term, i) => (
+                          <div key={i} className="flex items-center gap-3 p-3 bg-neutral-50 rounded-lg">
+                            <span className="text-sm font-medium text-neutral-600">{term.en}</span>
+                            <ArrowRight className="w-4 h-4 text-neutral-400 flex-shrink-0" />
+                            <span className="text-sm font-bold text-neutral-900">{term.spoken_as}</span>
+                            {term.note && <span className="text-xs text-neutral-500 ml-auto">({term.note})</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {dialectProfile.terminology_in_practice.terms_with_regional_variation.length > 0 && (
+                    <div>
+                      <p className="text-sm font-bold text-neutral-700 mb-2 uppercase tracking-wider">Regional Variations</p>
+                      <div className="space-y-2">
+                        {dialectProfile.terminology_in_practice.terms_with_regional_variation.map((term, i) => (
+                          <div key={i} className="flex items-center gap-3 p-3 bg-neutral-50 rounded-lg">
+                            <span className="text-sm font-medium text-neutral-600">{term.en}</span>
+                            <ArrowRight className="w-4 h-4 text-neutral-400 flex-shrink-0" />
+                            <span className="text-sm text-neutral-700">std: {term.standard}</span>
+                            <span className="text-sm font-bold text-purple-700">spoken: {term.spoken}</span>
+                            {term.note && <span className="text-xs text-neutral-500 ml-auto">({term.note})</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Idioms */}
+              {dialectProfile.idioms_observed.length > 0 && (
+                <div className="bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden shadow-lg">
+                  <div className="px-6 py-4 bg-neutral-50 border-b border-neutral-200">
+                    <h3 className="text-lg font-black text-neutral-900 uppercase tracking-tight">Idioms Observed</h3>
+                  </div>
+                  <div className="p-6 space-y-3">
+                    {dialectProfile.idioms_observed.map((idiom, i) => (
+                      <div key={i} className="p-4 bg-neutral-50 rounded-xl">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="text-base font-bold text-neutral-900">{idiom.spoken_form}</p>
+                            <p className="text-sm text-neutral-600 mt-1">EN: "{idiom.english_equivalent}"</p>
+                            <p className="text-xs text-neutral-500 mt-1">Context: {idiom.context}</p>
+                          </div>
+                          <span className="text-xs font-medium text-purple-600 bg-purple-50 px-2 py-1 rounded-md flex-shrink-0">
+                            {idiom.frequency}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Voice Characteristics */}
+              <div className="bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden shadow-lg">
+                <div className="px-6 py-4 bg-neutral-50 border-b border-neutral-200">
+                  <h3 className="text-lg font-black text-neutral-900 uppercase tracking-tight">Voice Characteristics</h3>
+                </div>
+                <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {[
+                    { label: 'Pitch Range', value: dialectProfile.voice_characteristics.pitch_range },
+                    { label: 'Speaking Style', value: dialectProfile.voice_characteristics.speaking_style },
+                    { label: 'Energy Level', value: dialectProfile.voice_characteristics.energy_level },
+                    { label: 'Accent Region', value: dialectProfile.voice_characteristics.accent_region },
+                    { label: 'Breathing', value: dialectProfile.voice_characteristics.breathing_pattern },
+                  ].filter(s => s.value).map((stat) => (
+                    <div key={stat.label} className="p-4 bg-neutral-50 rounded-xl">
+                      <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-1">{stat.label}</p>
+                      <p className="text-base font-medium text-neutral-800">{stat.value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Subtitle Pacing */}
+              <div className="bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden shadow-lg">
+                <div className="px-6 py-4 bg-neutral-50 border-b border-neutral-200">
+                  <h3 className="text-lg font-black text-neutral-900 uppercase tracking-tight">Subtitle Pacing</h3>
+                </div>
+                <div className="p-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="text-center p-3 bg-neutral-50 rounded-xl">
+                    <p className="text-xl font-black text-neutral-800">{dialectProfile.subtitle_pacing.natural_cps_range[0]}-{dialectProfile.subtitle_pacing.natural_cps_range[1]}</p>
+                    <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider mt-1">CPS Range</p>
+                  </div>
+                  <div className="text-center p-3 bg-purple-50 rounded-xl border border-purple-200">
+                    <p className="text-xl font-black text-purple-700">{dialectProfile.subtitle_pacing.preferred_cps}</p>
+                    <p className="text-xs font-bold text-purple-500 uppercase tracking-wider mt-1">Preferred CPS</p>
+                  </div>
+                  <div className="p-3 bg-neutral-50 rounded-xl col-span-2">
+                    <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-1">Line Breaks</p>
+                    <p className="text-sm font-medium text-neutral-800">{dialectProfile.subtitle_pacing.line_break_preference}</p>
+                    {dialectProfile.subtitle_pacing.compound_noun_handling && (
+                      <>
+                        <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider mb-1 mt-2">Compound Nouns</p>
+                        <p className="text-sm font-medium text-neutral-800">{dialectProfile.subtitle_pacing.compound_noun_handling}</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Raw JSON Preview */}
+              <details className="group">
+                <summary className="cursor-pointer text-sm font-bold text-neutral-500 hover:text-neutral-700 uppercase tracking-wider flex items-center gap-2">
+                  <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
+                  View raw JSON
+                </summary>
+                <div className="mt-4 p-4 bg-neutral-900 rounded-xl max-h-96 overflow-y-auto">
+                  <pre className="text-sm text-neutral-300 font-mono whitespace-pre-wrap">{JSON.stringify(dialectProfile, null, 2)}</pre>
+                </div>
+              </details>
             </div>
           </div>
         </div>

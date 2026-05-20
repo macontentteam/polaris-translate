@@ -3,11 +3,13 @@
 //   R2_ACCESS_KEY_ID     - Cloudflare R2 API token access key
 //   R2_SECRET_ACCESS_KEY - Cloudflare R2 API token secret key
 //   R2_ACCOUNT_ID        - Cloudflare account ID
+//   ANTHROPIC_API_KEY    - For AI contradiction analysis
 //
 // Actions:
-//   commit-knowledge  - Merges extracted knowledge into the 5 skill JSON files in R2
-//   flush-approvals   - Pushes approved translation records to R2 training data
-//   upload-raw        - Uploads a raw file to the R2 bucket (for archival)
+//   commit-knowledge       - Merges extracted knowledge into the 5 skill JSON files in R2
+//   flush-approvals        - Pushes approved translation records to R2 training data
+//   upload-raw             - Uploads a raw file to the R2 bucket (for archival)
+//   resolve-contradiction  - Writes a user-resolved QA correction to R2
 //
 // The R2 bucket is: polaris-knowledge-base
 // Skill files live at: kb/<language>/skill/<filename>.json
@@ -152,6 +154,37 @@ async function writeR2Json(accountId, accessKeyId, secretAccessKey, path, data) 
   }
 
   return { success: true, path };
+}
+
+// Call Claude directly for contradiction analysis
+async function callClaudeForAnalysis(prompt, systemPrompt) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1024,
+        temperature: 0,
+        system: systemPrompt || "",
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data.content?.[0]?.text || "";
+    return text;
+  } catch {
+    return null;
+  }
 }
 
 // Extract array from file data (handles flat arrays AND wrapper objects)
@@ -376,7 +409,7 @@ export async function handler(event) {
     // ACTION: commit-knowledge
     // ============================================
     if (action === "commit-knowledge") {
-      const { glossary, idioms, cultural_safeguards, srt_timing, metadata } =
+      const { glossary, idioms, cultural_safeguards, srt_timing, qa_overrides, metadata } =
         data || {};
 
       if (!data) {
@@ -392,6 +425,7 @@ export async function handler(event) {
         idioms: { added: 0 },
         safeguards: { added: 0 },
         srt: { updated: false },
+        qa_overrides: { added: 0, banned_added: 0 },
         source: metadata?.source_file || "unknown",
         language: langFolder,
       };
@@ -456,6 +490,134 @@ export async function handler(event) {
           );
         }
         results.srt = { updated };
+      }
+
+      // 5. Merge QA overrides from reviewer feedback (with contradiction detection)
+      if (qa_overrides && qa_overrides.length > 0) {
+        const qaPath = `${basePath}/qa_overrides.json`;
+        const existingQA = await readR2Json(
+          accountId, accessKeyId, secretAccessKey,
+          qaPath,
+          { qa_updates: [], banned_variants: [] }
+        );
+
+        const existingUpdates = Array.isArray(existingQA?.qa_updates) ? [...existingQA.qa_updates] : [];
+        const existingBanned = Array.isArray(existingQA?.banned_variants) ? existingQA.banned_variants : [];
+
+        const feedbackSource = `reviewer_feedback:${metadata?.source_file || "unknown"}`;
+        const contradictions = [];
+        const uniqueEntries = [];
+        let duplicatesSkipped = 0;
+
+        for (const override of qa_overrides) {
+          const newIncorrect = (override.incorrect || "").toLowerCase().trim();
+          if (!newIncorrect) continue;
+
+          const newSuggested = (override.suggested || "").trim();
+          const existingIdx = existingUpdates.findIndex(
+            (u) => (u.incorrect || "").toLowerCase().trim() === newIncorrect
+          );
+
+          if (existingIdx >= 0) {
+            const existing = existingUpdates[existingIdx];
+            const existingSuggested = (existing.approved_translation || "").trim();
+
+            if (existingSuggested.toLowerCase() !== newSuggested.toLowerCase()) {
+              contradictions.push({
+                id: crypto.randomUUID(),
+                incorrect: override.incorrect,
+                previous_suggestion: existingSuggested,
+                new_suggestion: newSuggested,
+                previous_source: existing.source || "unknown",
+                new_source: feedbackSource,
+                issue_type: override.issue_type || "",
+                issue_description: override.issue_description || "",
+              });
+              // Do NOT write this entry. Hold it for human resolution.
+            } else {
+              duplicatesSkipped++;
+            }
+          } else {
+            uniqueEntries.push({
+              incorrect: override.incorrect,
+              approved_translation: newSuggested,
+              issue_type: override.issue_type,
+              issue_description: override.issue_description,
+              timestamp: override.timestamp,
+              date_added: new Date().toISOString(),
+              source: feedbackSource,
+            });
+          }
+        }
+
+        // Get AI recommendations for all contradictions in a single call
+        if (contradictions.length > 0) {
+          const contradictionSummary = contradictions.map((c, i) =>
+            `Contradiction ${i + 1}:\n  Incorrect text: "${c.incorrect}"\n  Previous correction: "${c.previous_suggestion}" (source: ${c.previous_source})\n  New correction: "${c.new_suggestion}" (source: ${c.new_source})\n  Issue type: ${c.issue_type}\n  Description: ${c.issue_description}`
+          ).join("\n\n");
+
+          const aiResponse = await callClaudeForAnalysis(
+            `Analyze these ${contradictions.length} conflicting translation corrections for ${language}.\n\n${contradictionSummary}\n\nFor EACH contradiction, decide which correction is linguistically better. Return STRICT JSON array:\n[\n  {\n    "index": 0,\n    "recommended": "previous" or "new",\n    "reasoning": "One sentence in English explaining why this correction is better",\n    "confidence": 0.0 to 1.0\n  }\n]\n\nConsider grammar, spelling, capitalization rules, natural phrasing, and ${language} conventions. Return ONLY the JSON array.`,
+            `You are a ${language} linguistic expert reviewing translation QA corrections. Your job is to determine which of two conflicting corrections is more accurate. Be specific about WHY one is better. Always explain in English so a non-native speaker can understand your reasoning.`
+          );
+
+          if (aiResponse) {
+            try {
+              const jsonMatch = aiResponse.match(/\[[\s\S]*\]/);
+              if (jsonMatch) {
+                const recommendations = JSON.parse(jsonMatch[0]);
+                for (const rec of recommendations) {
+                  const idx = typeof rec.index === "number" ? rec.index : -1;
+                  if (idx >= 0 && idx < contradictions.length) {
+                    contradictions[idx].ai_recommendation = {
+                      recommended: rec.recommended === "previous" ? "previous" : "new",
+                      reasoning: rec.reasoning || "",
+                      confidence: typeof rec.confidence === "number" ? rec.confidence : 0.5,
+                    };
+                  }
+                }
+              }
+            } catch {
+              // AI parsing failed; contradictions still returned without recommendations
+            }
+          }
+
+          // Fill in fallback for any that didn't get a recommendation
+          for (const c of contradictions) {
+            if (!c.ai_recommendation) {
+              c.ai_recommendation = {
+                recommended: "new",
+                reasoning: "AI analysis unavailable. Defaulting to newer correction.",
+                confidence: 0,
+              };
+            }
+          }
+        }
+
+        // Only write non-contradicted entries; contradicted ones wait for human resolution
+        const bannedSet = new Set(existingBanned.map((b) => b.toLowerCase().trim()));
+        const contradictedKeys = new Set(contradictions.map((c) => (c.incorrect || "").toLowerCase().trim()));
+        const newBanned = qa_overrides
+          .map((o) => o.incorrect)
+          .filter(Boolean)
+          .filter((v) => !bannedSet.has(v.toLowerCase().trim()))
+          .filter((v) => !contradictedKeys.has(v.toLowerCase().trim()));
+
+        if (uniqueEntries.length > 0 || newBanned.length > 0) {
+          const mergedQA = {
+            qa_updates: [...existingUpdates, ...uniqueEntries],
+            banned_variants: [...existingBanned, ...newBanned],
+          };
+          await writeR2Json(accountId, accessKeyId, secretAccessKey, qaPath, mergedQA);
+        }
+
+        results.qa_overrides = {
+          added: uniqueEntries.length,
+          banned_added: newBanned.length,
+          duplicates_skipped: duplicatesSkipped,
+          contradictions: contradictions.length,
+          contradiction_details: contradictions,
+        };
       }
 
       return {
@@ -618,11 +780,84 @@ export async function handler(event) {
       };
     }
 
+    // ============================================
+    // ACTION: resolve-contradiction
+    // ============================================
+    if (action === "resolve-contradiction") {
+      const { incorrect, chosen_suggestion, resolution_type, source } = data || {};
+
+      if (!incorrect || !chosen_suggestion) {
+        return {
+          statusCode: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+          body: JSON.stringify({ error: "Missing incorrect or chosen_suggestion" }),
+        };
+      }
+
+      const qaPath = `${basePath}/qa_overrides.json`;
+      const existingQA = await readR2Json(
+        accountId, accessKeyId, secretAccessKey,
+        qaPath,
+        { qa_updates: [], banned_variants: [] }
+      );
+
+      const existingUpdates = Array.isArray(existingQA?.qa_updates) ? existingQA.qa_updates : [];
+      const existingBanned = Array.isArray(existingQA?.banned_variants) ? existingQA.banned_variants : [];
+      const incorrectKey = (incorrect || "").toLowerCase().trim();
+
+      const existingIdx = existingUpdates.findIndex(
+        (u) => (u.incorrect || "").toLowerCase().trim() === incorrectKey
+      );
+
+      if (existingIdx >= 0) {
+        existingUpdates[existingIdx] = {
+          ...existingUpdates[existingIdx],
+          approved_translation: chosen_suggestion,
+          resolution_type: resolution_type || "manual",
+          resolved_at: new Date().toISOString(),
+          resolved_by: "human",
+          updated_by: source || "manual_resolution",
+        };
+      } else {
+        existingUpdates.push({
+          incorrect,
+          approved_translation: chosen_suggestion,
+          issue_type: data.issue_type || "Reviewer Correction",
+          date_added: new Date().toISOString(),
+          source: source || "manual_resolution",
+          resolution_type: resolution_type || "manual",
+          resolved_at: new Date().toISOString(),
+          resolved_by: "human",
+        });
+      }
+
+      const bannedSet = new Set(existingBanned.map((b) => b.toLowerCase().trim()));
+      if (!bannedSet.has(incorrectKey)) {
+        existingBanned.push(incorrect);
+      }
+
+      const mergedQA = {
+        qa_updates: existingUpdates,
+        banned_variants: existingBanned,
+      };
+      await writeR2Json(accountId, accessKeyId, secretAccessKey, qaPath, mergedQA);
+
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+        body: JSON.stringify({
+          success: true,
+          action: "resolve-contradiction",
+          resolution: { incorrect, chosen_suggestion, resolution_type },
+        }),
+      };
+    }
+
     return {
       statusCode: 400,
       headers: { "Content-Type": "application/json", ...corsHeaders },
       body: JSON.stringify({
-        error: `Unknown action: ${action}. Valid actions: commit-knowledge, flush-approvals, upload-raw`,
+        error: `Unknown action: ${action}. Valid actions: commit-knowledge, flush-approvals, upload-raw, resolve-contradiction`,
       }),
     };
   } catch (err) {

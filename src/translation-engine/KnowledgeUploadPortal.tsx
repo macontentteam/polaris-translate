@@ -18,12 +18,48 @@ import {
   Eye,
   Menu
 } from 'lucide-react';
-import { extractKnowledgeFromFile, generateMergePreview, type ExtractionResult } from './knowledgeExtractor';
+import { extractKnowledgeFromFile, generateMergePreview, type ExtractionResult, type QAOverrideEntry } from './knowledgeExtractor';
 
 // Knowledge base upload proxy endpoint (Cloudflare R2)
 const KB_UPLOAD_URL = '/api/kb-upload';
 
 const IS_DEMO = false;
+
+// ============================================
+// CONTRADICTION RESOLUTION TYPES
+// ============================================
+
+interface ContradictionItem {
+  id: string;
+  incorrect: string;
+  previous_suggestion: string;
+  new_suggestion: string;
+  previous_source: string;
+  new_source: string;
+  issue_type: string;
+  issue_description: string;
+  language: string;
+  detected_at: string;
+  ai_recommendation: {
+    recommended: 'previous' | 'new';
+    reasoning: string;
+    confidence: number;
+  };
+}
+
+const contradictionsKey = (lang: string) =>
+  `polaris-contradictions-${lang.toLowerCase().replace(/[^a-z]/g, '-')}`;
+
+const loadContradictions = (lang: string): ContradictionItem[] => {
+  try {
+    const stored = localStorage.getItem(contradictionsKey(lang));
+    return stored ? JSON.parse(stored) : [];
+  } catch { return []; }
+};
+
+const persistContradictions = (lang: string, items: ContradictionItem[]) => {
+  localStorage.setItem(contradictionsKey(lang), JSON.stringify(items));
+};
 
 // Hardcoded sample extraction shown to public visitors in demo mode.
 const DEMO_SAMPLE_EXTRACTION: ExtractionResult = {
@@ -77,7 +113,18 @@ interface QueuedFile {
   error?: string;
   committed?: boolean;
   commitStatus?: 'idle' | 'committing' | 'committed' | 'error';
-  commitResult?: { glossary?: { added: number; updated: number }; idioms?: { added: number }; safeguards?: { added: number } };
+  commitResult?: {
+    glossary?: { added: number; updated: number };
+    idioms?: { added: number };
+    safeguards?: { added: number };
+    qa_overrides?: {
+      added: number;
+      banned_added: number;
+      duplicates_skipped: number;
+      contradictions: number;
+      contradiction_details?: { incorrect: string; previous_suggestion: string; new_suggestion: string; previous_source: string; new_source: string }[];
+    };
+  };
 }
 
 // ============================================
@@ -149,11 +196,11 @@ const UPLOAD_CARDS: UploadCard[] = [
     id: 'rejected',
     title: 'Rejected & Feedback',
     subtitle: 'What to avoid',
-    description: 'Upload rejected translations or reviewer feedback. The engine learns what NOT to do and which corrections were applied.',
+    description: 'Upload rejected translations or reviewer feedback (.pptx with slide notes). The engine learns what NOT to do and which corrections were applied.',
     icon: <XCircle className="w-7 h-7" />,
-    acceptedTypes: '.txt,.md,.pdf,.doc,.docx,.srt,.json,.csv,text/plain',
-    acceptLabel: 'TXT, DOCX, SRT, CSV',
-    extractionValue: ['Common mistakes', 'Reviewer corrections', 'Banned phrasings', 'Tone violations'],
+    acceptedTypes: '.txt,.md,.pdf,.doc,.docx,.srt,.json,.csv,.pptx,text/plain,application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    acceptLabel: 'PPTX, TXT, DOCX, SRT, CSV',
+    extractionValue: ['Reviewer corrections', 'Banned phrasings', 'Common mistakes', 'Tone violations'],
     color: '#ef4444',
     uploadFolder: 'uploads/rejected',
   },
@@ -226,6 +273,64 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
   const [previewItemId, setPreviewItemId] = useState<string | null>(null);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Contradiction resolution state
+  const [contradictions, setContradictions] = useState<ContradictionItem[]>([]);
+  const [showContradictions, setShowContradictions] = useState(false);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [customInputs, setCustomInputs] = useState<Record<string, string>>({});
+
+  // Load contradictions from localStorage on mount and language change
+  useEffect(() => {
+    setContradictions(loadContradictions(targetLanguage));
+  }, [targetLanguage]);
+
+  const saveContradictions = (items: ContradictionItem[]) => {
+    setContradictions(items);
+    persistContradictions(targetLanguage, items);
+  };
+
+  const resolveContradiction = async (
+    item: ContradictionItem,
+    choice: 'ai_recommendation' | 'keep_previous' | 'keep_new' | 'custom',
+    customValue?: string
+  ) => {
+    setResolvingId(item.id);
+    const chosenSuggestion =
+      choice === 'ai_recommendation'
+        ? (item.ai_recommendation.recommended === 'previous'
+            ? item.previous_suggestion
+            : item.new_suggestion)
+        : choice === 'keep_previous'
+          ? item.previous_suggestion
+          : choice === 'keep_new'
+            ? item.new_suggestion
+            : customValue || item.new_suggestion;
+
+    try {
+      const response = await fetch(KB_UPLOAD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'resolve-contradiction',
+          language: targetLanguage,
+          data: {
+            incorrect: item.incorrect,
+            chosen_suggestion: chosenSuggestion,
+            resolution_type: choice,
+            issue_type: item.issue_type,
+            source: item.new_source,
+          },
+        }),
+      });
+      if (!response.ok) throw new Error('Resolution failed');
+      saveContradictions(contradictions.filter(c => c.id !== item.id));
+    } catch {
+      // leave it in the list on failure
+    } finally {
+      setResolvingId(null);
+    }
+  };
 
   // Derive previewItem from queue so it always reflects latest state
   const previewItem = previewItemId ? queue.find(f => f.id === previewItemId) || null : null;
@@ -333,6 +438,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
             idioms: item.extractionResult.idioms,
             cultural_safeguards: item.extractionResult.cultural_safeguards,
             srt_timing: item.extractionResult.srt_timing,
+            qa_overrides: item.extractionResult.qa_overrides,
             metadata: item.extractionResult.metadata,
           },
         }),
@@ -435,6 +541,7 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
                 idioms: extractionResult.idioms,
                 cultural_safeguards: extractionResult.cultural_safeguards,
                 srt_timing: extractionResult.srt_timing,
+                qa_overrides: extractionResult.qa_overrides,
                 metadata: extractionResult.metadata,
               },
             }),
@@ -444,15 +551,37 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
             const result = await commitResponse.json();
             commitResult = result.results;
             committed = true;
+
+            // Capture contradictions from commit response and persist to localStorage
+            const newContradictions = commitResult?.qa_overrides?.contradiction_details;
+            if (Array.isArray(newContradictions) && newContradictions.length > 0) {
+              const items: ContradictionItem[] = newContradictions.map((c: any) => ({
+                ...c,
+                language: targetLanguage,
+                detected_at: new Date().toISOString(),
+              }));
+              const existing = loadContradictions(targetLanguage);
+              const merged = [...existing, ...items];
+              saveContradictions(merged);
+            }
           }
         } catch {
           // Commit failed but extraction succeeded; user can retry commit later
         }
 
         // Step 3: Complete with extraction results
-        const summary = committed
-          ? `Committed: ${extractionResult.glossary.length} terms, ${extractionResult.idioms.length} idioms, ${extractionResult.cultural_safeguards.length} cultural notes`
-          : `Extracted: ${extractionResult.glossary.length} terms, ${extractionResult.idioms.length} idioms, ${extractionResult.cultural_safeguards.length} cultural notes (commit pending)`;
+        const qaCount = extractionResult.qa_overrides?.length || 0;
+        const contradictionCount = commitResult?.qa_overrides?.contradictions || 0;
+        const addedCount = commitResult?.qa_overrides?.added || 0;
+        const summary = qaCount > 0
+          ? (committed
+            ? (contradictionCount > 0
+              ? `Committed: ${addedCount} corrections to KB. ${contradictionCount} contradiction${contradictionCount !== 1 ? 's' : ''} need your review.`
+              : `Committed: ${qaCount} corrections, ${extractionResult.cultural_safeguards.length} patterns to KB`)
+            : `Extracted: ${qaCount} corrections, ${extractionResult.cultural_safeguards.length} patterns (commit pending)`)
+          : (committed
+            ? `Committed: ${extractionResult.glossary.length} terms, ${extractionResult.idioms.length} idioms, ${extractionResult.cultural_safeguards.length} cultural notes`
+            : `Extracted: ${extractionResult.glossary.length} terms, ${extractionResult.idioms.length} idioms, ${extractionResult.cultural_safeguards.length} cultural notes (commit pending)`);
 
         setQueue(prev => prev.map(f => f.id === item.id ? {
           ...f,
@@ -505,6 +634,17 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
             <span className="hidden sm:block text-white/40 font-medium text-base uppercase tracking-widest">Knowledge Portal</span>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
+            {contradictions.length > 0 && (
+              <button
+                onClick={() => setShowContradictions(true)}
+                className="relative flex items-center gap-2 px-4 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded-full transition-all"
+              >
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                <span className="font-bold text-sm text-amber-300">
+                  {contradictions.length} conflict{contradictions.length !== 1 ? 's' : ''}
+                </span>
+              </button>
+            )}
             {totalQueued > 0 && (
               <button
                 onClick={() => setShowQueue(!showQueue)}
@@ -524,13 +664,20 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
               onChange={(e) => setTargetLanguage(e.target.value)}
               className="px-5 py-2.5 bg-white/10 border border-white/10 rounded-full text-white text-sm font-medium focus:outline-none focus:border-blue-500 appearance-none cursor-pointer"
             >
-              <option value="German (Germany)">German (Germany)</option>
-              <option value="French (France)">French (France)</option>
-              <option value="Spanish (Latin American)">Spanish (Latin American)</option>
-              <option value="Japanese">Japanese</option>
               <option value="Chinese (Mandarin)">Chinese (Mandarin)</option>
-              <option value="Korean">Korean</option>
+              <option value="Danish">Danish</option>
+              <option value="Dutch">Dutch</option>
+              <option value="English (UK)">English (UK)</option>
+              <option value="English (US)">English (US)</option>
+              <option value="Finnish">Finnish</option>
+              <option value="French (France)">French (France)</option>
+              <option value="German (Germany)">German (Germany)</option>
               <option value="Italian">Italian</option>
+              <option value="Japanese">Japanese</option>
+              <option value="Korean">Korean</option>
+              <option value="Norwegian">Norwegian</option>
+              <option value="Spanish (Latin American)">Spanish (Latin American)</option>
+              <option value="Swedish">Swedish</option>
             </select>
             {/* Hamburger menu */}
             <KPHamburgerMenu onNavigateHome={onNavigateHome} />
@@ -645,6 +792,132 @@ export const KnowledgeUploadPortal: React.FC<{ onNavigateHome: () => void }> = (
           setPreviewItem={setPreviewItem}
           onCommit={commitToKnowledgeBase}
         />
+      )}
+
+      {/* Contradiction Resolution Panel */}
+      {showContradictions && contradictions.length > 0 && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-6">
+          <div className="bg-neutral-900 rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col border border-amber-500/20">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-neutral-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="text-lg font-bold text-white">Conflicting Corrections</h3>
+                  <p className="text-xs text-neutral-400 mt-0.5">
+                    {contradictions.length} correction{contradictions.length !== 1 ? 's' : ''} conflict with existing KB entries. Choose which to keep.
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setShowContradictions(false)} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+                <X className="w-5 h-5 text-neutral-400" />
+              </button>
+            </div>
+
+            {/* Contradiction list */}
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+              {contradictions.map((item) => {
+                const isResolving = resolvingId === item.id;
+                const recommended = item.ai_recommendation?.recommended;
+                const confidence = item.ai_recommendation?.confidence || 0;
+                const confidencePct = Math.round(confidence * 100);
+
+                return (
+                  <div key={item.id} className="bg-neutral-800/50 border border-neutral-700/50 rounded-xl p-5">
+                    {/* Incorrect text */}
+                    <div className="flex items-center gap-2 mb-4">
+                      <span className="px-2 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">{item.issue_type || 'Correction'}</span>
+                      <span className="text-xs text-neutral-500">Incorrect:</span>
+                      <span className="text-sm text-white font-medium">"{item.incorrect}"</span>
+                    </div>
+
+                    {/* Two options side by side */}
+                    <div className="grid grid-cols-2 gap-3 mb-4">
+                      <div className={`p-3 rounded-lg border ${recommended === 'previous' ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-neutral-700/50 bg-neutral-800/30'}`}>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-[10px] font-bold text-neutral-500 uppercase">Previous</span>
+                          {recommended === 'previous' && (
+                            <span className="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-[9px] font-bold">AI PICK {confidencePct}%</span>
+                          )}
+                        </div>
+                        <p className="text-sm text-white">{item.previous_suggestion}</p>
+                        <p className="text-[10px] text-neutral-600 mt-1 truncate">{item.previous_source}</p>
+                      </div>
+                      <div className={`p-3 rounded-lg border ${recommended === 'new' ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-neutral-700/50 bg-neutral-800/30'}`}>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-[10px] font-bold text-neutral-500 uppercase">New</span>
+                          {recommended === 'new' && (
+                            <span className="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-[9px] font-bold">AI PICK {confidencePct}%</span>
+                          )}
+                        </div>
+                        <p className="text-sm text-white">{item.new_suggestion}</p>
+                        <p className="text-[10px] text-neutral-600 mt-1 truncate">{item.new_source}</p>
+                      </div>
+                    </div>
+
+                    {/* AI reasoning */}
+                    {item.ai_recommendation?.reasoning && (
+                      <div className="flex items-start gap-2 mb-4 px-3 py-2.5 bg-blue-500/5 border border-blue-500/15 rounded-lg">
+                        <Info className="w-3.5 h-3.5 text-blue-400 mt-0.5 flex-shrink-0" />
+                        <p className="text-xs text-blue-200/80">{item.ai_recommendation.reasoning}</p>
+                      </div>
+                    )}
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => resolveContradiction(item, 'ai_recommendation')}
+                        disabled={isResolving}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {isResolving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+                        Accept AI Pick
+                      </button>
+                      <button
+                        onClick={() => resolveContradiction(item, 'keep_previous')}
+                        disabled={isResolving}
+                        className="px-3 py-1.5 bg-white/10 hover:bg-white/15 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        Keep Previous
+                      </button>
+                      <button
+                        onClick={() => resolveContradiction(item, 'keep_new')}
+                        disabled={isResolving}
+                        className="px-3 py-1.5 bg-white/10 hover:bg-white/15 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        Keep New
+                      </button>
+                      <div className="flex items-center gap-1.5 ml-auto">
+                        <input
+                          type="text"
+                          value={customInputs[item.id] || ''}
+                          onChange={(e) => setCustomInputs(prev => ({ ...prev, [item.id]: e.target.value }))}
+                          placeholder="Custom correction..."
+                          className="px-2.5 py-1.5 bg-neutral-800 border border-neutral-700 rounded-lg text-xs text-white placeholder-neutral-600 w-48 focus:outline-none focus:border-blue-500"
+                        />
+                        <button
+                          onClick={() => {
+                            const val = customInputs[item.id]?.trim();
+                            if (val) resolveContradiction(item, 'custom', val);
+                          }}
+                          disabled={isResolving || !customInputs[item.id]?.trim()}
+                          className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-30"
+                        >
+                          Use Custom
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3 border-t border-neutral-800 text-xs text-neutral-500">
+              Resolved corrections are immediately written to the knowledge base.
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -918,39 +1191,113 @@ const QueueSidebar: React.FC<{
               </button>
             </div>
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-              <div className="grid grid-cols-3 gap-4">
-                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
-                  <div className="text-2xl font-bold text-emerald-400">{previewItem.extractionResult.glossary.length}</div>
-                  <div className="text-xs text-neutral-400 mt-1">Glossary Terms</div>
-                </div>
-                <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
-                  <div className="text-2xl font-bold text-blue-400">{previewItem.extractionResult.idioms.length}</div>
-                  <div className="text-xs text-neutral-400 mt-1">Idioms</div>
-                </div>
-                <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
-                  <div className="text-2xl font-bold text-amber-400">{previewItem.extractionResult.cultural_safeguards.length}</div>
-                  <div className="text-xs text-neutral-400 mt-1">Cultural Notes</div>
-                </div>
-              </div>
-              {previewItem.extractionResult.glossary.length > 0 && (
-                <div>
-                  <h4 className="text-sm font-bold text-white mb-3">Glossary Terms (Top 20)</h4>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {previewItem.extractionResult.glossary.slice(0, 20).map((term, idx) => (
-                      <div key={idx} className="bg-neutral-800/50 rounded-lg p-3 text-sm">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1">
-                            <div className="text-neutral-400">{term.en || '--'}</div>
-                            <div className="text-white font-medium mt-0.5">{term.target_approved}</div>
-                            {term.note && <div className="text-xs text-neutral-500 mt-1">{term.note}</div>}
+              {/* Stat cards: show QA corrections for feedback, glossary/idioms for everything else */}
+              {(previewItem.extractionResult.qa_overrides?.length || 0) > 0 ? (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
+                      <div className="text-2xl font-bold text-red-400">{previewItem.extractionResult.qa_overrides!.length}</div>
+                      <div className="text-xs text-neutral-400 mt-1">QA Corrections</div>
+                    </div>
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+                      <div className="text-2xl font-bold text-amber-400">{previewItem.extractionResult.cultural_safeguards.length}</div>
+                      <div className="text-xs text-neutral-400 mt-1">Patterns Learned</div>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-white mb-3">Reviewer Corrections</h4>
+                    <div className="space-y-2 max-h-80 overflow-y-auto">
+                      {previewItem.extractionResult.qa_overrides!.map((qa, idx) => (
+                        <div key={idx} className="bg-neutral-800/50 rounded-lg p-3 text-sm">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="px-2 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">{qa.issue_type}</span>
+                            {qa.timestamp && <span className="text-[10px] text-neutral-500">{qa.timestamp}</span>}
+                            {qa.slide_number && <span className="text-[10px] text-neutral-600">Slide {qa.slide_number}</span>}
                           </div>
-                          {term.usage_count && term.usage_count > 1 && (
-                            <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-xs font-medium">{term.usage_count}x</span>
+                          <div className="flex items-start gap-2">
+                            <XCircle className="w-3.5 h-3.5 text-red-400 mt-0.5 flex-shrink-0" />
+                            <span className="text-red-300/80 line-through">{qa.incorrect}</span>
+                          </div>
+                          <div className="flex items-start gap-2 mt-1">
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
+                            <span className="text-emerald-300">{qa.suggested}</span>
+                          </div>
+                          {qa.issue_description && (
+                            <p className="text-[11px] text-neutral-500 mt-1.5 pl-5">{qa.issue_description}</p>
                           )}
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
+                      <div className="text-2xl font-bold text-emerald-400">{previewItem.extractionResult.glossary.length}</div>
+                      <div className="text-xs text-neutral-400 mt-1">Glossary Terms</div>
+                    </div>
+                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
+                      <div className="text-2xl font-bold text-blue-400">{previewItem.extractionResult.idioms.length}</div>
+                      <div className="text-xs text-neutral-400 mt-1">Idioms</div>
+                    </div>
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+                      <div className="text-2xl font-bold text-amber-400">{previewItem.extractionResult.cultural_safeguards.length}</div>
+                      <div className="text-xs text-neutral-400 mt-1">Cultural Notes</div>
+                    </div>
+                  </div>
+                  {previewItem.extractionResult.glossary.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-bold text-white mb-3">Glossary Terms (Top 20)</h4>
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {previewItem.extractionResult.glossary.slice(0, 20).map((term, idx) => (
+                          <div key={idx} className="bg-neutral-800/50 rounded-lg p-3 text-sm">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex-1">
+                                <div className="text-neutral-400">{term.en || '--'}</div>
+                                <div className="text-white font-medium mt-0.5">{term.target_approved}</div>
+                                {term.note && <div className="text-xs text-neutral-500 mt-1">{term.note}</div>}
+                              </div>
+                              {term.usage_count && term.usage_count > 1 && (
+                                <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-xs font-medium">{term.usage_count}x</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Contradictions notice (shown after commit if any were detected) */}
+              {previewItem.commitResult?.qa_overrides?.contradictions > 0 && (
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400" />
+                    <h4 className="text-sm font-bold text-amber-300">
+                      {previewItem.commitResult.qa_overrides.contradictions} Conflict{previewItem.commitResult.qa_overrides.contradictions !== 1 ? 's' : ''} Detected
+                    </h4>
+                  </div>
+                  <p className="text-xs text-amber-200/60 mb-3">
+                    These corrections conflict with existing KB entries and were held for your review. Click the amber "conflicts" badge in the header to resolve them.
+                  </p>
+                  <button
+                    onClick={() => { setPreviewItem(null); setShowContradictions(true); }}
+                    className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold rounded-lg transition-colors"
+                  >
+                    Review Conflicts
+                  </button>
+                </div>
+              )}
+
+              {/* Duplicates notice */}
+              {previewItem.commitResult?.qa_overrides?.duplicates_skipped > 0 && (
+                <div className="flex items-center gap-2 px-4 py-2.5 bg-neutral-800/50 border border-neutral-700/30 rounded-lg">
+                  <Info className="w-3.5 h-3.5 text-neutral-500 flex-shrink-0" />
+                  <span className="text-xs text-neutral-400">
+                    {previewItem.commitResult.qa_overrides.duplicates_skipped} duplicate correction{previewItem.commitResult.qa_overrides.duplicates_skipped !== 1 ? 's' : ''} already in KB, skipped.
+                  </span>
                 </div>
               )}
             </div>
@@ -963,7 +1310,10 @@ const QueueSidebar: React.FC<{
                     Committed to Knowledge Base
                     {previewItem.commitResult && (
                       <span className="text-xs text-emerald-400/70 ml-1">
-                        (+{previewItem.commitResult.glossary?.added || 0} terms, +{previewItem.commitResult.idioms?.added || 0} idioms, +{previewItem.commitResult.safeguards?.added || 0} safeguards)
+                        {previewItem.commitResult.qa_overrides?.added
+                          ? `(+${previewItem.commitResult.qa_overrides.added} corrections, +${previewItem.commitResult.qa_overrides.banned_added || 0} banned)`
+                          : `(+${previewItem.commitResult.glossary?.added || 0} terms, +${previewItem.commitResult.idioms?.added || 0} idioms, +${previewItem.commitResult.safeguards?.added || 0} safeguards)`
+                        }
                       </span>
                     )}
                   </div>

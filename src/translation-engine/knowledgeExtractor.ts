@@ -1,3 +1,5 @@
+import JSZip from 'jszip';
+
 // ============================================
 // CLAUDE PROXY HELPER (shared pattern)
 // ============================================
@@ -63,11 +65,21 @@ interface SRTTiming {
   line_break_patterns: string[];
 }
 
+export interface QAOverrideEntry {
+  incorrect: string;
+  suggested: string;
+  issue_type: string;
+  issue_description: string;
+  timestamp?: string;
+  slide_number?: number;
+}
+
 export interface ExtractionResult {
   glossary: GlossaryEntry[];
   idioms: IdiomEntry[];
   cultural_safeguards: CulturalSafeguard[];
   srt_timing?: SRTTiming;
+  qa_overrides?: QAOverrideEntry[];
   metadata: {
     source_file: string;
     extraction_date: string;
@@ -334,6 +346,176 @@ const extractFromDocument = async (
 };
 
 // ============================================
+// PPTX REVIEWER FEEDBACK EXTRACTION
+// ============================================
+
+const extractNotesFromPptx = async (
+  file: File
+): Promise<{ slideNumber: number; text: string }[]> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(arrayBuffer);
+
+  const notesTexts: { slideNumber: number; text: string }[] = [];
+
+  const noteFileNames = Object.keys(zip.files)
+    .filter((name) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/i.test(name))
+    .sort((a, b) => {
+      const numA = parseInt(a.match(/notesSlide(\d+)/)?.[1] || "0");
+      const numB = parseInt(b.match(/notesSlide(\d+)/)?.[1] || "0");
+      return numA - numB;
+    });
+
+  for (const noteFile of noteFileNames) {
+    const slideNum = parseInt(noteFile.match(/notesSlide(\d+)/)?.[1] || "0");
+    const xml = await zip.file(noteFile)?.async("text");
+    if (!xml) continue;
+
+    const paragraphs: string[] = [];
+    const pBlocks = xml.split(/<a:p[^>]*>/);
+
+    for (const block of pBlocks) {
+      const textRuns: string[] = [];
+      const runMatches = block.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g);
+      for (const m of runMatches) {
+        if (m[1]) textRuns.push(m[1]);
+      }
+      const lineText = textRuns.join("").trim();
+      if (lineText) {
+        paragraphs.push(lineText);
+      }
+    }
+
+    const fullText = paragraphs.join("\n").trim();
+
+    if (fullText && fullText.length > 10 && !fullText.match(/^[\d\s]+$/)) {
+      notesTexts.push({ slideNumber: slideNum, text: fullText });
+    }
+  }
+
+  return notesTexts;
+};
+
+const extractFromPptxFeedback = async (
+  file: File,
+  targetLanguage: string,
+  onProgress?: (status: string) => void
+): Promise<
+  Omit<ExtractionResult, "metadata" | "srt_timing"> & {
+    qa_overrides: QAOverrideEntry[];
+  }
+> => {
+  onProgress?.("Parsing PowerPoint feedback file...");
+
+  const slideNotes = await extractNotesFromPptx(file);
+
+  if (slideNotes.length === 0) {
+    throw new Error(
+      "No reviewer notes found in the PowerPoint file. " +
+        "The feedback must be in the slide notes (the notes pane below each slide in PowerPoint)."
+    );
+  }
+
+  onProgress?.(
+    `Found ${slideNotes.length} slides with reviewer notes. Extracting corrections...`
+  );
+
+  const notesContent = slideNotes
+    .map((n) => `--- Slide ${n.slideNumber} ---\n${n.text}`)
+    .join("\n\n");
+
+  const prompt = `You are parsing reviewer feedback from a translation QA review for ${targetLanguage}.
+
+Each slide contains structured notes from a human reviewer who checked a localized video/subtitle. The notes typically follow this format:
+- Issue Types: (category of the problem)
+- Issue Description: (what is wrong)
+- Incorrect: (the wrong text)
+- Suggested: (the correct text)
+- Timestamp: (where in the video)
+
+REVIEWER NOTES:
+"""
+${notesContent}
+"""
+
+Parse EVERY slide's feedback into structured corrections. Return STRICT JSON:
+
+{
+  "qa_corrections": [
+    {
+      "incorrect": "The exact incorrect text from the reviewer's notes",
+      "suggested": "The exact suggested correction from the reviewer's notes",
+      "issue_type": "Capitalize the category (e.g., Linguistic, Spelling, Grammar, Punctuation, Capitalization, Mistranslation)",
+      "issue_description": "The reviewer's description of the issue",
+      "timestamp": "Video timestamp if provided",
+      "slide_number": 0
+    }
+  ],
+  "patterns": [
+    {
+      "rule": "A general rule derived from multiple corrections (only if a clear pattern exists across 2+ corrections)",
+      "severity": "high|medium|low",
+      "context": "When this rule applies"
+    }
+  ]
+}
+
+RULES:
+1. Extract ONLY what the reviewer explicitly wrote. Do not infer corrections not present in the notes.
+2. Use the reviewer's exact text for "incorrect" and "suggested" fields. Do not modify, translate, or "fix" them.
+3. Every slide with Issue/Incorrect/Suggested fields MUST produce a qa_corrections entry.
+4. "patterns" should only contain rules derivable from MULTIPLE similar corrections. If corrections are all different types, the patterns array can be empty.
+5. Return ONLY valid JSON, no preamble, no markdown fences.`;
+
+  const rawText = await callClaudeProxy({
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0,
+    max_tokens: 4096,
+  });
+
+  const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error(
+      "Failed to parse reviewer feedback. Claude did not return valid JSON."
+    );
+  }
+
+  const parsed = JSON.parse(jsonMatch[0]);
+
+  const qaOverrides: QAOverrideEntry[] = Array.isArray(parsed.qa_corrections)
+    ? parsed.qa_corrections.map((c: any) => ({
+        incorrect: c.incorrect || "",
+        suggested: c.suggested || "",
+        issue_type: c.issue_type || "Other",
+        issue_description: c.issue_description || "",
+        timestamp: c.timestamp,
+        slide_number: c.slide_number,
+      }))
+    : [];
+
+  const culturalSafeguards: CulturalSafeguard[] = Array.isArray(
+    parsed.patterns
+  )
+    ? parsed.patterns.map((p: any) => ({
+        risk_term: p.rule || "",
+        preferred_alternative: p.context || "",
+        severity: p.severity || "medium",
+        context: `Derived from reviewer feedback: ${file.name}`,
+      }))
+    : [];
+
+  onProgress?.(
+    `Extracted ${qaOverrides.length} corrections and ${culturalSafeguards.length} patterns.`
+  );
+
+  return {
+    glossary: [],
+    idioms: [],
+    cultural_safeguards: culturalSafeguards,
+    qa_overrides: qaOverrides,
+  };
+};
+
+// ============================================
 // MAIN EXTRACTION FUNCTION
 // ============================================
 
@@ -350,31 +532,41 @@ export const extractKnowledgeFromFile = async (
     cultural_safeguards: [],
   };
   let srt_timing: SRTTiming | undefined;
+  let qa_overrides: QAOverrideEntry[] | undefined;
 
   try {
     if (cardType === "podcasts" || cardType === "video") {
-      // Transcribe then extract
       const transcript = await transcribeAudioOrVideo(file, targetLanguage, onProgress);
       extraction = await extractFromTranscript(transcript, targetLanguage, onProgress);
     } else if (cardType === "srt") {
-      // Read SRT content and analyze timing
       const content = await file.text();
       srt_timing = await extractFromSRT(content, onProgress);
 
-      // Also extract glossary terms from subtitle text
       const textOnly = content.replace(/^\d+\n/gm, "").replace(/\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}\n/g, "");
       extraction = await extractFromTranscript(textOnly, targetLanguage, onProgress);
     } else if (cardType === "documents") {
       extraction = await extractFromDocument(file, targetLanguage, onProgress);
     } else if (cardType === "approved" || cardType === "rejected") {
-      // For approved/rejected translations, extract patterns
-      const content = await file.text();
-      extraction = await extractFromTranscript(content, targetLanguage, onProgress);
+      const isPptx = file.name.toLowerCase().endsWith(".pptx");
+
+      if (isPptx && cardType === "rejected") {
+        const result = await extractFromPptxFeedback(file, targetLanguage, onProgress);
+        extraction = {
+          glossary: result.glossary,
+          idioms: result.idioms,
+          cultural_safeguards: result.cultural_safeguards,
+        };
+        qa_overrides = result.qa_overrides;
+      } else {
+        const content = await file.text();
+        extraction = await extractFromTranscript(content, targetLanguage, onProgress);
+      }
     }
 
     return {
       ...extraction,
       srt_timing,
+      qa_overrides,
       metadata: {
         source_file: file.name,
         extraction_date: new Date().toISOString(),

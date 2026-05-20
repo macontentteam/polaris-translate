@@ -10,6 +10,7 @@
     "dev:netlify": "npx netlify dev"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "lucide-react": "^0.556.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

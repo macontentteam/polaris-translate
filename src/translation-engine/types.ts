@@ -417,6 +417,87 @@ export const TARGET_LANGUAGES = [
 ];
 
 // ============================================
+// DIALECT PROFILE (Calibration Pipeline)
+// ============================================
+
+export interface DialectSourceMaterial {
+  type: 'audio' | 'video' | 'transcript';
+  title: string;
+  duration_minutes?: number;
+  speaker_region?: string;
+  speaker_context?: string;
+  analyzed_date: string;
+}
+
+export interface DialectPacing {
+  words_per_minute_avg: number;
+  words_per_minute_range: [number, number];
+  pause_frequency: string;
+  pause_duration_avg_ms: number;
+  emphasis_pattern: string;
+  sentence_length_avg_words: number;
+}
+
+export interface DialectRegister {
+  formality_level: string;
+  address_form: string;
+  humor_frequency: string;
+  hedging_language: string;
+  directness: string;
+}
+
+export interface DialectTermEntry {
+  en: string;
+  spoken_as: string;
+  note?: string;
+}
+
+export interface DialectTermVariation {
+  en: string;
+  standard: string;
+  spoken: string;
+  note?: string;
+}
+
+export interface DialectIdiom {
+  context: string;
+  english_equivalent: string;
+  spoken_form: string;
+  frequency: string;
+}
+
+export interface DialectSubtitlePacing {
+  natural_cps_range: [number, number];
+  preferred_cps: number;
+  line_break_preference: string;
+  compound_noun_handling: string;
+}
+
+export interface DialectVoiceCharacteristics {
+  pitch_range: string;
+  speaking_style: string;
+  energy_level: string;
+  accent_region: string;
+  breathing_pattern: string;
+}
+
+export interface DialectProfile {
+  language: string;
+  profile_version: string;
+  source_material: DialectSourceMaterial;
+  pacing: DialectPacing;
+  register: DialectRegister;
+  terminology_in_practice: {
+    terms_used_as_english_loanwords: string[];
+    terms_always_translated: DialectTermEntry[];
+    terms_with_regional_variation: DialectTermVariation[];
+  };
+  idioms_observed: DialectIdiom[];
+  subtitle_pacing: DialectSubtitlePacing;
+  voice_characteristics: DialectVoiceCharacteristics;
+}
+
+// ============================================
 // SUPPORTED FILE TYPES
 // ============================================
 
