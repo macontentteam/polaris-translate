@@ -26,8 +26,12 @@ import {
   getHistory,
   saveToHistory,
   loadHistoryResult,
-  deleteHistoryItem
-} from './geminiService';
+  deleteHistoryItem,
+  isSRTFile,
+  readFileAsText,
+  processSRTLocalization,
+  type SRTLocalizationResult
+} from './translationService';
 import {
   LocalizationResult,
   TARGET_LANGUAGES,
@@ -44,7 +48,7 @@ const R2_ASSETS = 'https://pub-3907c38bb1b4451db0ac41139e7ac3c0.r2.dev/assets';
 const ASSETS = {
   heroVideo: `${R2_ASSETS}/hero-v2.mp4`,
   laptopHand: `${R2_ASSETS}/laptop-and-hand-v4.png`,
-  dualIntelligence: `${R2_ASSETS}/gemini-gpt-logos-bg.png`,
+  dualIntelligence: `${R2_ASSETS}/claude-openai-bg.png`,
 };
 
 // ============================================
@@ -524,9 +528,12 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
   const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
   const [showModeTooltip, setShowModeTooltip] = useState<string | null>(null);
   const [cardsVisible, setCardsVisible] = useState(false);
+  const [srtMode, setSrtMode] = useState(false);
+  const [srtResults, setSrtResults] = useState<Record<string, SRTLocalizationResult> | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
+  const srtInputRef = useRef<HTMLInputElement>(null);
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const formalityDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -584,6 +591,8 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
     setCustomPrompt('');
     setShowDictionary(false);
     setDictionaryLookup(null);
+    setSrtMode(false);
+    setSrtResults(null);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -592,6 +601,15 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
     setUploadedFile(file);
     setError(null);
     if (!projectTitle) setProjectTitle(file.name.replace(/\.[^/.]+$/, ''));
+
+    if (isSRTFile(file)) {
+      setSrtMode(true);
+      const text = await readFileAsText(file);
+      setExtractedText(text);
+      return;
+    }
+
+    setSrtMode(false);
     const ext = file.name.toLowerCase().split('.').pop();
     if (ext === 'txt' || ext === 'md') setExtractedText(await file.text());
     else setExtractedText('');
@@ -637,6 +655,60 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleSRTTranslate = async () => {
+    if (!uploadedFile || !srtMode) return;
+    if (targetLanguages.length === 0) {
+      setError('Please select at least one target language');
+      return;
+    }
+    setIsProcessing(true);
+    setError(null);
+    setSrtResults(null);
+    setResult(null);
+
+    try {
+      const srtContent = extractedText || await readFileAsText(uploadedFile);
+      const results = await processSRTLocalization(
+        srtContent,
+        targetLanguages,
+        translationMode,
+        formalityLevel,
+        translationMode === 'custom' ? customPrompt : undefined,
+        (stage, detail) => {
+          setProcessingStage(stage);
+          setProcessingDetail(detail || '');
+        }
+      );
+      setSrtResults(results);
+    } catch (err: any) {
+      setError(err.message || 'SRT translation failed');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDownloadSRT = (lang: string, srtContent: string) => {
+    const baseName = uploadedFile?.name.replace(/\.srt$/i, '') || 'translation';
+    const langSlug = lang.toLowerCase().replace(/[^a-z]/g, '-');
+    const filename = `${baseName}_${langSlug}.srt`;
+    const blob = new Blob([srtContent], { type: 'application/x-subrip;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadAllSRT = () => {
+    if (!srtResults) return;
+    Object.entries(srtResults).forEach(([lang, res]) => {
+      setTimeout(() => handleDownloadSRT(lang, res.srtContent), 100);
+    });
   };
 
   // Keeps your existing lookup logic, but now App passes it the correct target language via wrapper
@@ -886,7 +958,10 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
 
               {/* Target Language */}
               <div className="relative">
-                <label className="block text-sm font-bold text-neutral-700 mb-3 uppercase tracking-wider">Target Language *</label>
+                <label className="block text-sm font-bold text-neutral-700 mb-3 uppercase tracking-wider">
+                  Target Language{srtMode ? 's' : ''} *
+                  {srtMode && <span className="ml-2 text-xs font-medium text-blue-500 normal-case tracking-normal">(select multiple for batch SRT)</span>}
+                </label>
                 <div ref={languageDropdownRef} className="relative">
                   <button
                     onClick={() => setLanguageDropdownOpen(!languageDropdownOpen)}
@@ -903,8 +978,14 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                         <button
                           key={lang}
                           onClick={() => {
-                            setTargetLanguages([lang]);
-                            setLanguageDropdownOpen(false);
+                            if (srtMode) {
+                              setTargetLanguages((prev) =>
+                                prev.includes(lang) ? prev.filter((l) => l !== lang) : [...prev, lang]
+                              );
+                            } else {
+                              setTargetLanguages([lang]);
+                              setLanguageDropdownOpen(false);
+                            }
                           }}
                           className="w-full px-5 py-4 text-left hover:bg-blue-50 flex items-center justify-between transition-colors"
                         >
@@ -912,6 +993,16 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                           {targetLanguages.includes(lang) && <Check className="w-5 h-5 text-blue-500" />}
                         </button>
                       ))}
+                      {srtMode && (
+                        <div className="border-t border-neutral-200 px-5 py-3">
+                          <button
+                            onClick={() => setLanguageDropdownOpen(false)}
+                            className="w-full py-2 text-center font-bold text-blue-600 hover:text-blue-700 text-sm uppercase tracking-wider"
+                          >
+                            Done ({targetLanguages.length} selected)
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -998,17 +1089,96 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
               {(['text', 'documents', 'media'] as const).map((tab) => (
                 <button
                   key={tab}
-                  onClick={() => setSourceTab(tab)}
+                  onClick={() => { setSourceTab(tab); setSrtMode(false); }}
                   className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
-                    sourceTab === tab ? 'bg-neutral-900 text-white shadow-lg' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                    sourceTab === tab && !srtMode ? 'bg-neutral-900 text-white shadow-lg' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                   }`}
                 >
                   {tab}
                 </button>
               ))}
+              <button
+                onClick={() => { setSourceTab('documents'); setSrtMode(true); setUploadedFile(null); setExtractedText(''); }}
+                className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
+                  srtMode ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                }`}
+              >
+                SRT
+              </button>
             </div>
 
-            {sourceTab === 'text' ? (
+            {srtMode ? (
+              <div className="flex flex-col rounded-2xl border-2 border-blue-200 overflow-hidden" style={{ minHeight: '400px' }}>
+                <div className="px-6 py-4 bg-blue-50 border-b-2 border-blue-200 flex items-center justify-between">
+                  <div>
+                    <span className="text-lg font-bold text-blue-900 uppercase tracking-wide">SRT Subtitle Translation</span>
+                    <p className="text-sm text-blue-600 mt-1">Upload an English .srt file to generate translated subtitles</p>
+                  </div>
+                  {targetLanguages.length > 0 && (
+                    <span className="px-3 py-1 bg-blue-600 text-white text-sm font-bold rounded-full">
+                      {targetLanguages.length} language{targetLanguages.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 flex items-center justify-center p-10 bg-white">
+                  <input
+                    ref={srtInputRef}
+                    type="file"
+                    accept=".srt"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                  {isProcessing ? (
+                    <div className="text-center">
+                      <Loader2 className="w-16 h-16 text-blue-500 animate-spin mx-auto mb-6" />
+                      <p className="text-2xl font-bold text-neutral-700 mb-2">{processingStage}</p>
+                      <p className="text-lg text-neutral-500">{processingDetail}</p>
+                    </div>
+                  ) : uploadedFile ? (
+                    <div className="text-center w-full max-w-2xl">
+                      <svg className="w-20 h-20 mx-auto mb-6 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M4 7V4a2 2 0 0 1 2-2h8.5L20 7.5V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="2" y1="13" x2="10" y2="13" />
+                        <line x1="2" y1="17" x2="8" y2="17" />
+                        <line x1="2" y1="9" x2="6" y2="9" />
+                      </svg>
+                      <p className="text-2xl font-bold text-neutral-900 mb-2">{uploadedFile.name}</p>
+                      <p className="text-lg text-neutral-500 mb-4">{(uploadedFile.size / 1024).toFixed(1)} KB</p>
+                      {extractedText && (
+                        <div className="mt-4 p-4 bg-neutral-50 rounded-2xl max-h-48 overflow-y-auto text-left font-mono text-sm text-neutral-600 whitespace-pre-wrap">
+                          {extractedText.substring(0, 1500)}
+                          {extractedText.length > 1500 ? '\n...' : ''}
+                        </div>
+                      )}
+                      <button
+                        onClick={() => { setUploadedFile(null); setExtractedText(''); setSrtResults(null); }}
+                        className="mt-6 px-6 py-3 text-red-500 hover:text-red-600 text-lg font-bold transition-colors"
+                      >
+                        Remove File
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => srtInputRef.current?.click()}
+                      className="flex flex-col items-center gap-6 p-16 border-4 border-dashed border-blue-300 rounded-3xl hover:border-blue-500 hover:bg-blue-50/50 transition-all"
+                    >
+                      <svg className="w-16 h-16 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M4 7V4a2 2 0 0 1 2-2h8.5L20 7.5V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="2" y1="13" x2="10" y2="13" />
+                        <line x1="2" y1="17" x2="8" y2="17" />
+                        <line x1="2" y1="9" x2="6" y2="9" />
+                      </svg>
+                      <div className="text-center">
+                        <p className="text-2xl font-bold text-neutral-700 mb-2">Upload SRT file</p>
+                        <p className="text-lg text-neutral-500">English master subtitle file (.srt)</p>
+                      </div>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : sourceTab === 'text' ? (
               <div className="flex flex-col rounded-2xl border-2 border-neutral-200 overflow-hidden" style={{ minHeight: '400px' }}>
                 <div className="px-6 py-4 bg-neutral-50 border-b-2 border-neutral-200">
                   <span className="text-lg font-bold text-neutral-700 uppercase tracking-wide">Source Text</span>
@@ -1122,26 +1292,50 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
               </div>
             )}
 
-            {!result && (
-              <div className="mt-12 flex justify-center">
-                <button
-                  onClick={handleTranslate}
-                  disabled={isProcessing || (!textInput.trim() && !uploadedFile) || targetLanguages.length === 0}
-                  className="px-12 py-5 bg-black hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-black text-lg rounded-full transition-all flex items-center gap-3 shadow-2xl shadow-black/20 hover:scale-105 disabled:hover:scale-100 uppercase tracking-wide"
-                >
-                  {isProcessing ? (
-                    <>
-                      <Loader2 className="w-7 h-7 animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      Translate
-                      <ArrowRight className="w-7 h-7" />
-                    </>
-                  )}
-                </button>
-              </div>
+            {srtMode ? (
+              !srtResults && (
+                <div className="mt-12 flex justify-center">
+                  <button
+                    onClick={handleSRTTranslate}
+                    disabled={isProcessing || !uploadedFile || targetLanguages.length === 0}
+                    className="px-12 py-5 bg-blue-600 hover:bg-blue-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-black text-lg rounded-full transition-all flex items-center gap-3 shadow-2xl shadow-blue-600/20 hover:scale-105 disabled:hover:scale-100 uppercase tracking-wide"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-7 h-7 animate-spin" />
+                        Generating SRT...
+                      </>
+                    ) : (
+                      <>
+                        Generate SRT
+                        <ArrowRight className="w-7 h-7" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              )
+            ) : (
+              !result && (
+                <div className="mt-12 flex justify-center">
+                  <button
+                    onClick={handleTranslate}
+                    disabled={isProcessing || (!textInput.trim() && !uploadedFile) || targetLanguages.length === 0}
+                    className="px-12 py-5 bg-black hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-black text-lg rounded-full transition-all flex items-center gap-3 shadow-2xl shadow-black/20 hover:scale-105 disabled:hover:scale-100 uppercase tracking-wide"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-7 h-7 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        Translate
+                        <ArrowRight className="w-7 h-7" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              )
             )}
           </div>
         </div>
@@ -1226,6 +1420,110 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
             </div>
           </div>
         ))}
+
+      {srtResults && (
+        <div className="bg-gradient-to-br from-blue-50 to-white py-16">
+          <div className="max-w-6xl mx-auto px-4 sm:px-8">
+            <div className="flex items-center justify-between mb-10">
+              <div>
+                <h2 className="text-3xl font-black text-neutral-900 uppercase tracking-tight">SRT Results</h2>
+                <p className="text-neutral-500 mt-2">
+                  {uploadedFile?.name} translated into {Object.keys(srtResults).length} language{Object.keys(srtResults).length !== 1 ? 's' : ''}
+                </p>
+              </div>
+              {Object.keys(srtResults).length > 1 && (
+                <button
+                  onClick={handleDownloadAllSRT}
+                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-full transition-all flex items-center gap-2 shadow-lg"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  Download All
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-6">
+              {Object.entries(srtResults).map(([lang, res]) => {
+                const v = res.validationSummary;
+                const allPass = v.failingCues === 0 && v.warningCues === 0;
+                const hasFailures = v.failingCues > 0;
+
+                return (
+                  <div key={lang} className="bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden shadow-lg">
+                    <div className="px-6 py-5 bg-neutral-50 border-b border-neutral-200 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className={`w-4 h-4 rounded-full ${allPass ? 'bg-emerald-500' : hasFailures ? 'bg-red-500' : 'bg-amber-500'}`} />
+                        <h3 className="text-xl font-black text-neutral-900 uppercase tracking-tight">{lang}</h3>
+                        <span className="text-sm text-neutral-500">
+                          {(res.processingTimeMs / 1000).toFixed(1)}s
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleDownloadSRT(lang, res.srtContent)}
+                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-full transition-all flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="7 10 12 15 17 10" />
+                          <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        Download .srt
+                      </button>
+                    </div>
+
+                    <div className="p-6">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
+                        {[
+                          { label: 'Cues', value: v.totalCues.toString(), color: 'text-neutral-800' },
+                          { label: 'Passing', value: v.passingCues.toString(), color: 'text-emerald-600' },
+                          { label: 'Warnings', value: v.warningCues.toString(), color: v.warningCues > 0 ? 'text-amber-600' : 'text-neutral-400' },
+                          { label: 'Failures', value: v.failingCues.toString(), color: v.failingCues > 0 ? 'text-red-600' : 'text-neutral-400' },
+                          { label: 'Avg CPS', value: v.avgCps.toFixed(1), color: 'text-neutral-800' },
+                          { label: 'Max CPS', value: v.maxCps.toFixed(1), color: v.maxCps > 18 ? 'text-red-600' : 'text-neutral-800' },
+                          { label: 'Abbrevs', value: v.srtShortSubstitutions.toString(), color: v.srtShortSubstitutions > 0 ? 'text-blue-600' : 'text-neutral-400' },
+                        ].map((stat) => (
+                          <div key={stat.label} className="text-center p-3 bg-neutral-50 rounded-xl">
+                            <p className={`text-2xl font-black ${stat.color}`}>{stat.value}</p>
+                            <p className="text-xs font-bold text-neutral-500 uppercase tracking-wider mt-1">{stat.label}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {v.recommendations.length > 0 && (
+                        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl mb-4">
+                          <p className="font-bold text-amber-800 text-sm uppercase tracking-wider mb-2">Recommendations</p>
+                          <ul className="space-y-1">
+                            {v.recommendations.map((rec, i) => (
+                              <li key={i} className="text-sm text-amber-700 flex items-start gap-2">
+                                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                                {rec}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <details className="group">
+                        <summary className="cursor-pointer text-sm font-bold text-neutral-500 hover:text-neutral-700 uppercase tracking-wider flex items-center gap-2">
+                          <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
+                          Preview SRT output
+                        </summary>
+                        <div className="mt-4 p-4 bg-neutral-900 rounded-xl max-h-64 overflow-y-auto">
+                          <pre className="text-sm text-neutral-300 font-mono whitespace-pre-wrap">{res.srtContent.substring(0, 3000)}{res.srtContent.length > 3000 ? '\n...' : ''}</pre>
+                        </div>
+                      </details>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showDictionary && dictionaryLookup && (
         <DictionaryModal lookup={dictionaryLookup} onClose={() => setShowDictionary(false)} onReplace={handleWordReplace} />

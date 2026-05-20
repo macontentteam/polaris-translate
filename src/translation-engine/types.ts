@@ -422,6 +422,7 @@ export const TARGET_LANGUAGES = [
 
 export const SUPPORTED_FILE_TYPES = {
   documents: ['.txt', '.md', '.doc', '.docx', '.pdf', '.rtf'],
+  subtitles: ['.srt'],
   images: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'],
   video: ['.mp4', '.webm', '.mov', '.avi', '.mkv'],
   audio: ['.mp3', '.wav', '.m4a', '.ogg', '.flac']
@@ -429,6 +430,7 @@ export const SUPPORTED_FILE_TYPES = {
 
 export const ACCEPTED_MIME_TYPES = {
   documents: 'text/plain,.md,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf',
+  subtitles: '.srt,application/x-subrip,text/srt',
   images: 'image/png,image/jpeg,image/gif,image/webp',
   video: 'video/mp4,video/webm,video/quicktime,video/x-msvideo',
   audio: 'audio/mpeg,audio/wav,audio/mp4,audio/ogg'

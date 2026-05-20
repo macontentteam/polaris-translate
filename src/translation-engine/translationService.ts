@@ -15,6 +15,18 @@ import {
   ConsensusResult,
 } from "./types";
 
+import {
+  parseSRT,
+  joinSentences,
+  buildSRTTranslationPrompt,
+  parseTranslationResponse,
+  processSRTTranslation,
+  generateValidationSummary,
+  type SRTDocument,
+  type SRTProcessingResult,
+  type SRTValidationSummary,
+} from "./srtProcessor";
+
 // ============================================
 // CLAUDE PROXY HELPER
 // ============================================
@@ -1301,4 +1313,114 @@ export const deleteHistoryItem = (historyItemId: string) => {
   };
   localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
   localStorage.removeItem(`te_result_${historyItemId}`);
+};
+
+// ============================================
+// SRT LOCALIZATION PIPELINE
+// ============================================
+// Full pipeline for translating an English master SRT into one or more
+// target languages. Uses sentence joining (solves DeepL fragmentation),
+// timing-aware translation prompts, CPS/CPL enforcement, and srt_short
+// glossary substitutions.
+
+export interface SRTLocalizationResult {
+  language: string;
+  srtContent: string;
+  processingResult: SRTProcessingResult;
+  validationSummary: SRTValidationSummary;
+  masterCueCount: number;
+  joinedSentenceCount: number;
+  processingTimeMs: number;
+}
+
+export const isSRTFile = (file: File): boolean => {
+  return file.name.toLowerCase().endsWith('.srt');
+};
+
+export const readFileAsText = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsText(file, 'utf-8');
+  });
+};
+
+export const processSRTLocalization = async (
+  srtContent: string,
+  targetLanguages: string[],
+  translationMode: TranslationMode,
+  formalityLevel: FormalityLevel,
+  customFormalityPrompt: string | undefined,
+  onProgress: (stage: string, detail?: string) => void
+): Promise<Record<string, SRTLocalizationResult>> => {
+  const results: Record<string, SRTLocalizationResult> = {};
+
+  onProgress("parsing", "Parsing SRT file...");
+  const masterSRT = parseSRT(srtContent);
+
+  if (masterSRT.cues.length === 0) {
+    throw new Error("No valid subtitle cues found in the SRT file. Check the file format.");
+  }
+
+  onProgress("joining", `Joining sentences across ${masterSRT.totalCues} cues...`);
+  const sentences = joinSentences(masterSRT);
+
+  for (const lang of targetLanguages) {
+    const langStart = Date.now();
+
+    onProgress("loading_kb", `Loading KB for ${lang}...`);
+    const kb = await loadKnowledgeBase(lang, translationMode);
+
+    onProgress("translating_srt", `Translating ${sentences.length} sentence groups into ${lang}...`);
+
+    const formalityInstruction = getFormalityInstruction(formalityLevel, customFormalityPrompt);
+    const glossaryBlock = buildGlossaryBlock(kb);
+    const idiomBlock = buildIdiomBlock(kb);
+    const safeguardsBlock = buildSafeguardsBlock(kb);
+
+    const prompt = buildSRTTranslationPrompt(
+      sentences,
+      lang,
+      kb.srt_constraints,
+      glossaryBlock,
+      idiomBlock,
+      safeguardsBlock,
+      formalityInstruction
+    );
+
+    const { text: translationText } = await callClaudeProxy({
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 4096,
+      temperature: AI_TEMPERATURE,
+    }, 1, 90000);
+
+    const translations = parseTranslationResponse(translationText || "", sentences.length);
+
+    onProgress("fitting", `Fitting ${lang} translations to timing windows...`);
+
+    const processingResult = processSRTTranslation(
+      masterSRT,
+      sentences,
+      translations,
+      kb.srt_constraints,
+      kb.glossary?.entries || []
+    );
+
+    const validationSummary = generateValidationSummary(processingResult, kb.srt_constraints);
+
+    onProgress("validating_srt", `${lang}: ${validationSummary.passingCues}/${validationSummary.totalCues} cues passing`);
+
+    results[lang] = {
+      language: lang,
+      srtContent: processingResult.srtOutput,
+      processingResult,
+      validationSummary,
+      masterCueCount: masterSRT.totalCues,
+      joinedSentenceCount: sentences.length,
+      processingTimeMs: Date.now() - langStart,
+    };
+  }
+
+  return results;
 };
