@@ -157,7 +157,7 @@ const Header: React.FC<{ onNavigateHome: () => void; onNavigateToTool: () => voi
   return (
     <header
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-        scrolled ? 'bg-black/90 backdrop-blur-xl border-b border-white/10' : 'bg-transparent'
+        scrolled ? 'bg-black/90 backdrop-blur-xl border-b border-white/10' : 'bg-black/40 backdrop-blur-sm'
       }`}
     >
       <div className="max-w-[1400px] mx-auto px-4 sm:px-8 h-16 sm:h-20 flex items-center justify-between">
@@ -171,9 +171,7 @@ const Header: React.FC<{ onNavigateHome: () => void; onNavigateToTool: () => voi
           <button onClick={onNavigateToTool} className="hidden sm:block text-white/70 hover:text-white text-base font-medium">
             Try it
           </button>
-          <button className="hidden sm:block px-6 py-2.5 text-base font-medium text-white bg-white/10 hover:bg-white/20 rounded-full">
-            Sign In
-          </button>
+          {/* Sign In button hidden for now */}
           <HamburgerMenu
             polarisLinks={[
               { label: 'Start Translating', onClick: onNavigateToTool },
@@ -323,7 +321,7 @@ const LandingPage: React.FC<{ onNavigateToTool: () => void }> = ({ onNavigateToT
         <div className="w-full max-w-[1400px] grid grid-cols-2 md:grid-cols-4 gap-6 sm:gap-10 pt-12 sm:pt-16 pb-20 sm:pb-32 px-4 sm:px-8 z-10">
           <div className="text-center animate-reveal" style={{ animationDelay: '0.1s' }}>
             <p className="text-5xl md:text-6xl lg:text-7xl font-black" style={{ color: '#ffffff', textShadow: '0 0 20px rgba(255,255,255,0.3)' }}>
-              30<span className="text-blue-400">+</span>
+              14
             </p>
             <p className="text-lg font-bold tracking-[0.3em] text-neutral-300 uppercase mt-4">Languages</p>
           </div>
@@ -379,7 +377,7 @@ const LandingPage: React.FC<{ onNavigateToTool: () => void }> = ({ onNavigateToT
               { num: '01', title: 'Upload anything', desc: 'Text, documents, video, audio. Our engine extracts and processes it all.' },
               { num: '02', title: 'Intelligent translation', desc: 'Claude translates with full context awareness, applying industry glossaries and cultural rules.' },
               { num: '03', title: 'Back-translation check', desc: 'The translation is converted back to English. If meaning drifted, we catch it.' },
-              { num: '04', title: 'GPT-5.2 audit', desc: 'Every word is scrutinized. Terminology, tone, accuracy-nothing escapes review.' },
+              { num: '04', title: 'ChatGPT audit', desc: 'Every word is scrutinized. Terminology, tone, accuracy-nothing escapes review.' },
               { num: '05', title: 'Consensus or iterate', desc: 'If both models agree: ship it. If not: revise and retry. Up to 3 rounds until perfect.' },
             ].map((step, i) => {
               // Alternating: even rows → number(white) | text(grey), odd rows → text(grey) | number(white)
