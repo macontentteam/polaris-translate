@@ -548,7 +548,8 @@ export const buildSRTTranslationPrompt = (
   glossaryBlock: string,
   idiomBlock: string,
   safeguardsBlock: string,
-  formalityInstruction: string
+  formalityInstruction: string,
+  qaOverridesBlock: string = ""
 ): string => {
   const maxCps = constraints.constraints.timing_readability.target_cps;
   const maxCharsPerLine = constraints.constraints.visual_formatting.max_chars_per_line;
@@ -572,7 +573,7 @@ SUBTITLE CONSTRAINTS (non-negotiable):
 - Use approved srt_short abbreviations from the glossary when the full term would exceed the character budget
 
 FORMALITY: ${formalityInstruction}
-${glossaryBlock}${idiomBlock}${safeguardsBlock}
+${glossaryBlock}${idiomBlock}${safeguardsBlock}${qaOverridesBlock}
 
 CRITICAL RULES:
 - Each sentence may span multiple subtitle cues. Translate the FULL meaning concisely.

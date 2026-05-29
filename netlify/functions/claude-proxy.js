@@ -56,7 +56,7 @@ export async function handler(event) {
     };
 
     if (system) requestBody.system = system;
-    if (temperature !== undefined) requestBody.temperature = temperature;
+    requestBody.temperature = 0;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

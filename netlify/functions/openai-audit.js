@@ -209,7 +209,7 @@ export async function handler(event) {
           },
           { role: "user", content: prompt },
         ],
-        temperature: 0.1,
+        temperature: 0,
         max_tokens: 2000,
         response_format: { type: "json_object" },
       }),

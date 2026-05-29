@@ -27,6 +27,16 @@ import {
   type SRTValidationSummary,
 } from "./srtProcessor";
 
+import {
+  parseStoryboardPPTX,
+  buildStoryboardTranslationPrompt,
+  buildStoryboardAuditPrompt,
+  parseStoryboardTranslationResponse,
+  processStoryboardTranslations,
+  type StoryboardDocument,
+  type StoryboardProcessingResult,
+} from "./storyboardProcessor";
+
 // ============================================
 // CLAUDE PROXY HELPER
 // ============================================
@@ -144,9 +154,27 @@ const generateCacheKey = (input: string, targetLang: string, mode: string, forma
   return `${CACHE_PREFIX}${Math.abs(hash).toString(36)}`;
 };
 
-// Stubs for now (you can wire caching later)
-const getCachedResult = (_cacheKey: string): LocalizationResult | null => null;
-const setCachedResult = (_cacheKey: string, _result: LocalizationResult): void => {};
+const getCachedResult = (cacheKey: string): LocalizationResult | null => {
+  try {
+    const raw = localStorage.getItem(cacheKey);
+    if (!raw) return null;
+    return JSON.parse(raw) as LocalizationResult;
+  } catch {
+    return null;
+  }
+};
+
+const setCachedResult = (cacheKey: string, result: LocalizationResult): void => {
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify(result));
+  } catch {
+    const keys = Object.keys(localStorage).filter(k => k.startsWith(CACHE_PREFIX)).sort();
+    if (keys.length > 0) {
+      localStorage.removeItem(keys[0]);
+      try { localStorage.setItem(cacheKey, JSON.stringify(result)); } catch {}
+    }
+  }
+};
 
 // ============================================
 // HELPERS
@@ -460,6 +488,71 @@ const buildSafeguardsBlock = (kb: KnowledgeBase): string => {
   return `\n\u2550\u2550\u2550 CULTURAL SAFEGUARDS (Mandatory rules) \u2550\u2550\u2550
 ${lines.join("\n")}
 \u2550\u2550\u2550 END SAFEGUARDS \u2550\u2550\u2550\n`;
+};
+
+const buildQAOverridesBlock = (kb: KnowledgeBase): string => {
+  const qaUpdates = kb.qa_overrides?.qa_updates;
+  const bannedVariants = kb.qa_overrides?.banned_variants;
+  if ((!qaUpdates || qaUpdates.length === 0) && (!bannedVariants || bannedVariants.length === 0)) return "";
+
+  const lines: string[] = [];
+
+  // Add banned variants first (highest priority, formality corrections)
+  if (bannedVariants && Array.isArray(bannedVariants)) {
+    const bans = bannedVariants.slice(0, 30).map((b: any) => {
+      if (typeof b === 'string') return `BANNED: "${b}"`;
+      if (b.banned && b.replacement) return `BANNED: "${b.banned}" -> USE: "${b.replacement}"`;
+      return "";
+    }).filter(Boolean);
+    if (bans.length > 0) lines.push(...bans);
+  }
+
+  // Add QA corrections grouped by category, prioritizing formality and mistranslation
+  if (qaUpdates && qaUpdates.length > 0) {
+    const priorityOrder = ['formality', 'mistranslation', 'grammar', 'punctuation', 'spelling', 'capitalization'];
+    const byCategory: Record<string, any[]> = {};
+    for (const q of qaUpdates) {
+      const cat = (q as any).category || 'general';
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(q);
+    }
+
+    let count = 0;
+    const maxEntries = 50;
+
+    for (const cat of priorityOrder) {
+      if (!byCategory[cat] || count >= maxEntries) continue;
+      for (const q of byCategory[cat]) {
+        if (count >= maxEntries) break;
+        const inc = (q as any).incorrect || (q as any).english_original || '';
+        const sug = (q as any).approved_translation || '';
+        if (inc && sug) {
+          lines.push(`DO NOT USE: "${inc}" -> CORRECT: "${sug}"`);
+          count++;
+        }
+      }
+    }
+
+    // Fill remaining slots with other categories
+    for (const [cat, items] of Object.entries(byCategory)) {
+      if (priorityOrder.includes(cat) || count >= maxEntries) continue;
+      for (const q of items) {
+        if (count >= maxEntries) break;
+        const inc = (q as any).incorrect || (q as any).english_original || '';
+        const sug = (q as any).approved_translation || '';
+        if (inc && sug) {
+          lines.push(`DO NOT USE: "${inc}" -> CORRECT: "${sug}"`);
+          count++;
+        }
+      }
+    }
+  }
+
+  if (lines.length === 0) return "";
+
+  return `\n═══ QA CORRECTIONS (Vendor-approved fixes from quality review) ═══
+${lines.join("\n")}
+═══ END QA CORRECTIONS ═══\n`;
 };
 
 // ============================================
@@ -800,6 +893,7 @@ const runConsensusLoop = async (
   const glossaryBlock = buildGlossaryBlock(kb);
   const idiomBlock = buildIdiomBlock(kb);
   const safeguardsBlock = buildSafeguardsBlock(kb);
+  const qaOverridesBlock = buildQAOverridesBlock(kb);
   const glossaryChecklist = buildGlossaryChecklist(kb, source);
   const culturalRulesForAudit = safeguardsBlock || "No cultural safeguards provided.";
 
@@ -820,7 +914,7 @@ const runConsensusLoop = async (
 Your goal: produce a translation that reads as if it were originally written in ${target} by a native speaker for a professional audience. Not a word-for-word translation, but a natural, accurate localization.
 
 FORMALITY LEVEL: ${instr}
-${glossaryBlock}${idiomBlock}${safeguardsBlock}
+${glossaryBlock}${idiomBlock}${safeguardsBlock}${qaOverridesBlock}
 TRANSLATION GUIDELINES:
 
 GLOSSARY:
@@ -1331,6 +1425,13 @@ export interface SRTLocalizationResult {
   masterCueCount: number;
   joinedSentenceCount: number;
   processingTimeMs: number;
+  auditResult?: {
+    score: number;
+    status: string;
+    errors: any[];
+    suggestions: string[];
+    rawNotes: string;
+  };
 }
 
 export const isSRTFile = (file: File): boolean => {
@@ -1378,6 +1479,9 @@ export const processSRTLocalization = async (
     const glossaryBlock = buildGlossaryBlock(kb);
     const idiomBlock = buildIdiomBlock(kb);
     const safeguardsBlock = buildSafeguardsBlock(kb);
+    const qaOverridesBlock = buildQAOverridesBlock(kb);
+    const glossaryChecklist = buildGlossaryChecklist(kb, sentences.map(s => s.text).join(' '));
+    const culturalRulesForAudit = safeguardsBlock || "No cultural safeguards provided.";
 
     const prompt = buildSRTTranslationPrompt(
       sentences,
@@ -1386,7 +1490,8 @@ export const processSRTLocalization = async (
       glossaryBlock,
       idiomBlock,
       safeguardsBlock,
-      formalityInstruction
+      formalityInstruction,
+      qaOverridesBlock
     );
 
     const { text: translationText } = await callClaudeProxy({
@@ -1409,7 +1514,70 @@ export const processSRTLocalization = async (
 
     const validationSummary = generateValidationSummary(processingResult, kb.srt_constraints);
 
-    onProgress("validating_srt", `${lang}: ${validationSummary.passingCues}/${validationSummary.totalCues} cues passing`);
+    // --- DETERMINISTIC QUALITY CHECKS ---
+    const fullTranslation = processingResult.fittedCues.map(c => c.translatedText).join('\n');
+    const fullSource = sentences.map(s => s.text).join('\n');
+    const hardErrors: any[] = [];
+
+    // Profanity scan on translated text
+    const langCode = LANGUAGE_TO_CODE_MAP[lang] || "";
+    const profanityMatches = scanForProfanity(fullTranslation, langCode);
+    for (const match of profanityMatches) {
+      hardErrors.push({
+        location: `Profanity: "${match.term}"`,
+        issue: `Profanity detected in SRT translation: "${match.term}" (${match.language}). Must be removed or replaced.`,
+        current: match.term,
+        suggested: "[remove or replace with appropriate term]",
+        severity: "critical",
+      });
+    }
+
+    // Cultural safeguard check
+    const translationUpper = fullTranslation.normalize("NFC").toUpperCase();
+    if (kb.cultural_safeguards?.safeguards?.length) {
+      for (const sg of kb.cultural_safeguards.safeguards) {
+        if (sg.risk_term && translationUpper.includes(sg.risk_term.toUpperCase())) {
+          hardErrors.push({
+            location: `Safeguard: "${sg.risk_term}"`,
+            issue: `Cultural safeguard violated: "${sg.risk_term}" should be "${sg.preferred_alternative}"`,
+            current: sg.risk_term,
+            suggested: sg.preferred_alternative,
+            severity: "critical",
+          });
+        }
+        if (sg.forbidden_alternative && translationUpper.includes(sg.forbidden_alternative.toUpperCase())) {
+          hardErrors.push({
+            location: `Forbidden: "${sg.forbidden_alternative}"`,
+            issue: `Forbidden term used: "${sg.forbidden_alternative}" must be "${sg.required_term}"`,
+            current: sg.forbidden_alternative,
+            suggested: sg.required_term,
+            severity: "critical",
+          });
+        }
+      }
+    }
+
+    // --- GPT CROSS-MODEL AUDIT ---
+    onProgress("auditing_srt", `Running quality audit on ${lang} subtitles...`);
+
+    const srtAuditResult = await callGPTAudit(
+      fullTranslation,
+      "",
+      lang,
+      fullSource,
+      glossaryChecklist || glossaryBlock,
+      culturalRulesForAudit,
+      "srt"
+    );
+
+    // Combine hard errors with GPT audit
+    const hasHardErrors = hardErrors.length > 0;
+    const gptScore = srtAuditResult.score || 95;
+    const combinedScore = hasHardErrors ? Math.min(gptScore, 100 - (hardErrors.length * 15)) : gptScore;
+    const combinedErrors = [...(srtAuditResult.errors || []), ...hardErrors];
+    const combinedStatus = combinedScore >= PASS_THRESHOLD ? "PASS" : "FAIL";
+
+    onProgress("validating_srt", `${lang}: ${validationSummary.passingCues}/${validationSummary.totalCues} cues passing | Score: ${combinedScore}/100`);
 
     results[lang] = {
       language: lang,
@@ -1419,6 +1587,210 @@ export const processSRTLocalization = async (
       masterCueCount: masterSRT.totalCues,
       joinedSentenceCount: sentences.length,
       processingTimeMs: Date.now() - langStart,
+      auditResult: {
+        score: combinedScore,
+        status: combinedStatus,
+        errors: combinedErrors,
+        suggestions: srtAuditResult.suggestions || [],
+        rawNotes: srtAuditResult.rawNotes || "",
+      },
+    };
+  }
+
+  return results;
+};
+
+// ============================================
+// STORYBOARD PPTX PIPELINE
+// ============================================
+// Parses a storyboard PPTX, extracts dialog + timecodes,
+// translates via Claude with dubbing-aware prompts,
+// and produces a structured result for the Dubbing Reference Table.
+
+export interface StoryboardLocalizationResult {
+  language: string;
+  document: StoryboardDocument;
+  processingResult: StoryboardProcessingResult;
+  processingTimeMs: number;
+  auditResult?: {
+    score: number;
+    status: string;
+    errors: any[];
+    suggestions: string[];
+    rawNotes: string;
+  };
+}
+
+export const isStoryboardFile = (file: File): boolean => {
+  return file.name.toLowerCase().endsWith('.pptx');
+};
+
+export const processStoryboardLocalization = async (
+  file: File,
+  targetLanguages: string[],
+  translationMode: TranslationMode,
+  formalityLevel: FormalityLevel,
+  customFormalityPrompt: string | undefined,
+  onProgress: (stage: string, detail?: string) => void
+): Promise<Record<string, StoryboardLocalizationResult>> => {
+  const results: Record<string, StoryboardLocalizationResult> = {};
+
+  onProgress("parsing", "Parsing storyboard PPTX...");
+  const doc = await parseStoryboardPPTX(file);
+
+  if (doc.shots.length === 0) {
+    throw new Error("No storyboard shots found in this PPTX. Make sure the file contains tables with DIALOG, TRANSLATION, and Time columns.");
+  }
+
+  onProgress("parsed", `Found ${doc.totalShots} shots across ${doc.storyboardSlides.length} storyboard slides (${doc.moodBoardSlides.length} mood board slides skipped)`);
+
+  for (const lang of targetLanguages) {
+    const langStart = Date.now();
+
+    onProgress("loading_kb", `Loading KB for ${lang}...`);
+    const kb = await loadKnowledgeBase(lang, translationMode);
+
+    onProgress("translating_storyboard", `Translating ${doc.totalShots} shots into ${lang}...`);
+
+    const formalityInstruction = getFormalityInstruction(formalityLevel, customFormalityPrompt);
+    const glossaryBlock = buildGlossaryBlock(kb);
+    const idiomBlock = buildIdiomBlock(kb);
+    const safeguardsBlock = buildSafeguardsBlock(kb);
+    const qaOverridesBlock = buildQAOverridesBlock(kb);
+
+    const prompt = buildStoryboardTranslationPrompt(
+      doc.shots,
+      lang,
+      glossaryBlock,
+      idiomBlock,
+      safeguardsBlock,
+      formalityInstruction,
+      qaOverridesBlock
+    );
+
+    const { text: translationText } = await callClaudeProxy({
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 8192,
+      temperature: AI_TEMPERATURE,
+    }, 1, 120000);
+
+    let translations = parseStoryboardTranslationResponse(translationText || "", doc.shots);
+
+    // --- STORYBOARD AUDIT PASS ---
+    // Verify translation quality and apply corrections via a second Claude call
+    onProgress("auditing", `Verifying ${lang} translation quality...`);
+
+    try {
+      const auditPrompt = buildStoryboardAuditPrompt(
+        doc.shots,
+        translations,
+        lang,
+        formalityInstruction,
+        safeguardsBlock,
+        qaOverridesBlock,
+        glossaryBlock
+      );
+
+      const { text: auditText } = await callClaudeProxy({
+        messages: [{ role: "user", content: auditPrompt }],
+        max_tokens: 8192,
+        temperature: AI_TEMPERATURE,
+      }, 1, 120000);
+
+      if (auditText) {
+        const revisedTranslations = parseStoryboardTranslationResponse(auditText, doc.shots);
+        if (revisedTranslations.length === translations.length && revisedTranslations.every(t => t.trim().length > 0)) {
+          translations = revisedTranslations;
+        }
+      }
+    } catch (auditErr) {
+      console.warn("Storyboard audit pass failed, using initial translation:", auditErr);
+    }
+
+    onProgress("processing", `Processing ${lang} translations...`);
+
+    const processingResult = processStoryboardTranslations(doc, translations);
+
+    // --- DETERMINISTIC QUALITY CHECKS ---
+    const fullTranslation = translations.join('\n');
+    const fullSource = doc.shots.map(s => s.dialog).join('\n');
+    const hardErrors: any[] = [];
+
+    // Profanity scan on translated text
+    const langCode = LANGUAGE_TO_CODE_MAP[lang] || "";
+    const profanityMatches = scanForProfanity(fullTranslation, langCode);
+    for (const match of profanityMatches) {
+      hardErrors.push({
+        location: `Profanity: "${match.term}"`,
+        issue: `Profanity detected in storyboard translation: "${match.term}" (${match.language}). Must be removed or replaced.`,
+        current: match.term,
+        suggested: "[remove or replace with appropriate term]",
+        severity: "critical",
+      });
+    }
+
+    // Cultural safeguard check
+    const translationUpper = fullTranslation.normalize("NFC").toUpperCase();
+    if (kb.cultural_safeguards?.safeguards?.length) {
+      for (const sg of kb.cultural_safeguards.safeguards) {
+        if (sg.risk_term && translationUpper.includes(sg.risk_term.toUpperCase())) {
+          hardErrors.push({
+            location: `Safeguard: "${sg.risk_term}"`,
+            issue: `Cultural safeguard violated: "${sg.risk_term}" should be "${sg.preferred_alternative}"`,
+            current: sg.risk_term,
+            suggested: sg.preferred_alternative,
+            severity: "critical",
+          });
+        }
+        if (sg.forbidden_alternative && translationUpper.includes(sg.forbidden_alternative.toUpperCase())) {
+          hardErrors.push({
+            location: `Forbidden: "${sg.forbidden_alternative}"`,
+            issue: `Forbidden term used: "${sg.forbidden_alternative}" must be "${sg.required_term}"`,
+            current: sg.forbidden_alternative,
+            suggested: sg.required_term,
+            severity: "critical",
+          });
+        }
+      }
+    }
+
+    // --- GPT CROSS-MODEL AUDIT ---
+    onProgress("auditing_storyboard", `Running quality audit on ${lang} storyboard...`);
+
+    const glossaryChecklist = buildGlossaryChecklist(kb, fullSource);
+    const culturalRulesForAudit = safeguardsBlock || "No cultural safeguards provided.";
+
+    const storyboardAuditResult = await callGPTAudit(
+      fullTranslation,
+      "",
+      lang,
+      fullSource,
+      glossaryChecklist || glossaryBlock,
+      culturalRulesForAudit,
+      "storyboard"
+    );
+
+    // Combine hard errors with GPT audit
+    const hasHardErrors = hardErrors.length > 0;
+    const gptScore = storyboardAuditResult.score || 95;
+    const combinedScore = hasHardErrors ? Math.min(gptScore, 100 - (hardErrors.length * 15)) : gptScore;
+    const combinedErrors = [...(storyboardAuditResult.errors || []), ...hardErrors];
+    const combinedStatus = combinedScore >= PASS_THRESHOLD ? "PASS" : "FAIL";
+
+    onProgress("complete", `${lang}: ${processingResult.stats.goodFit}/${processingResult.stats.totalShots} shots fit timing | Score: ${combinedScore}/100`);
+
+    results[lang] = {
+      language: lang,
+      document: doc,
+      processingResult,
+      processingTimeMs: Date.now() - langStart,
+      auditResult: {
+        score: combinedScore,
+        status: combinedStatus,
+        errors: combinedErrors,
+        suggestions: storyboardAuditResult.suggestions || [],
+        rawNotes: storyboardAuditResult.rawNotes || "",
+      },
     };
   }
 

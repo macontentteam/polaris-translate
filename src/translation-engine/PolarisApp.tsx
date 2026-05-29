@@ -28,9 +28,12 @@ import {
   loadHistoryResult,
   deleteHistoryItem,
   isSRTFile,
+  isStoryboardFile,
   readFileAsText,
   processSRTLocalization,
-  type SRTLocalizationResult
+  processStoryboardLocalization,
+  type SRTLocalizationResult,
+  type StoryboardLocalizationResult
 } from './translationService';
 import {
   analyzeDialectFromAudio,
@@ -535,6 +538,8 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
   const [cardsVisible, setCardsVisible] = useState(false);
   const [srtMode, setSrtMode] = useState(false);
   const [srtResults, setSrtResults] = useState<Record<string, SRTLocalizationResult> | null>(null);
+  const [storyboardMode, setStoryboardMode] = useState(false);
+  const [storyboardResults, setStoryboardResults] = useState<Record<string, StoryboardLocalizationResult> | null>(null);
   const [dialectMode, setDialectMode] = useState(false);
   const [dialectFile, setDialectFile] = useState<File | null>(null);
   const [dialectTranscript, setDialectTranscript] = useState('');
@@ -548,6 +553,7 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const srtInputRef = useRef<HTMLInputElement>(null);
+  const storyboardInputRef = useRef<HTMLInputElement>(null);
   const dialectInputRef = useRef<HTMLInputElement>(null);
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const formalityDropdownRef = useRef<HTMLDivElement>(null);
@@ -608,6 +614,8 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
     setDictionaryLookup(null);
     setSrtMode(false);
     setSrtResults(null);
+    setStoryboardMode(false);
+    setStoryboardResults(null);
     setDialectMode(false);
     setDialectFile(null);
     setDialectTranscript('');
@@ -732,6 +740,49 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
     Object.entries(srtResults).forEach(([lang, res]) => {
       setTimeout(() => handleDownloadSRT(lang, res.srtContent), 100);
     });
+  };
+
+  const handleStoryboardFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!isStoryboardFile(file)) {
+      setError('Please upload a .pptx file');
+      return;
+    }
+    setUploadedFile(file);
+    setError(null);
+    if (!projectTitle) setProjectTitle(file.name.replace(/\.pptx$/i, ''));
+  };
+
+  const handleStoryboardTranslate = async () => {
+    if (!uploadedFile || !storyboardMode) return;
+    if (targetLanguages.length === 0) {
+      setError('Please select at least one target language');
+      return;
+    }
+    setIsProcessing(true);
+    setError(null);
+    setStoryboardResults(null);
+    setResult(null);
+
+    try {
+      const results = await processStoryboardLocalization(
+        uploadedFile,
+        targetLanguages,
+        translationMode,
+        formalityLevel,
+        translationMode === 'custom' ? customPrompt : undefined,
+        (stage, detail) => {
+          setProcessingStage(stage);
+          setProcessingDetail(detail || '');
+        }
+      );
+      setStoryboardResults(results);
+    } catch (err: any) {
+      setError(err.message || 'Storyboard translation failed');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleDialectFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1193,16 +1244,16 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
               {(['text', 'documents', 'media'] as const).map((tab) => (
                 <button
                   key={tab}
-                  onClick={() => { setSourceTab(tab); setSrtMode(false); setDialectMode(false); }}
+                  onClick={() => { setSourceTab(tab); setSrtMode(false); setStoryboardMode(false); setDialectMode(false); setStoryboardResults(null); }}
                   className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
-                    sourceTab === tab && !srtMode && !dialectMode ? 'bg-neutral-900 text-white shadow-lg' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                    sourceTab === tab && !srtMode && !storyboardMode && !dialectMode ? 'bg-neutral-900 text-white shadow-lg' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                   }`}
                 >
                   {tab}
                 </button>
               ))}
               <button
-                onClick={() => { setSourceTab('documents'); setSrtMode(true); setDialectMode(false); setUploadedFile(null); setExtractedText(''); }}
+                onClick={() => { setSourceTab('documents'); setSrtMode(true); setStoryboardMode(false); setDialectMode(false); setUploadedFile(null); setExtractedText(''); setStoryboardResults(null); }}
                 className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
                   srtMode ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
@@ -1210,7 +1261,15 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                 SRT
               </button>
               <button
-                onClick={() => { setDialectMode(true); setSrtMode(false); setUploadedFile(null); setExtractedText(''); }}
+                onClick={() => { setStoryboardMode(true); setSrtMode(false); setDialectMode(false); setUploadedFile(null); setExtractedText(''); setSrtResults(null); }}
+                className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
+                  storyboardMode ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/25' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                }`}
+              >
+                Storyboard
+              </button>
+              <button
+                onClick={() => { setDialectMode(true); setSrtMode(false); setStoryboardMode(false); setUploadedFile(null); setExtractedText(''); setStoryboardResults(null); }}
                 className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold text-sm sm:text-base uppercase tracking-wide transition-all ${
                   dialectMode ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/25' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
@@ -1357,6 +1416,7 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                 </div>
                 <div className="flex-1 flex items-center justify-center p-10 bg-white">
                   <input
+                    id="srt-file-input"
                     ref={srtInputRef}
                     type="file"
                     accept=".srt"
@@ -1394,9 +1454,25 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                       </button>
                     </div>
                   ) : (
-                    <button
-                      onClick={() => srtInputRef.current?.click()}
-                      className="flex flex-col items-center gap-6 p-16 border-4 border-dashed border-blue-300 rounded-3xl hover:border-blue-500 hover:bg-blue-50/50 transition-all"
+                    <label
+                      htmlFor="srt-file-input"
+                      className="flex flex-col items-center gap-6 p-16 border-4 border-dashed border-blue-300 rounded-3xl hover:border-blue-500 hover:bg-blue-50/50 transition-all cursor-pointer"
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add('border-blue-500', 'bg-blue-50/50'); }}
+                      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('border-blue-500', 'bg-blue-50/50'); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.currentTarget.classList.remove('border-blue-500', 'bg-blue-50/50');
+                        const file = e.dataTransfer.files[0];
+                        if (file && file.name.endsWith('.srt')) {
+                          const dataTransfer = new DataTransfer();
+                          dataTransfer.items.add(file);
+                          if (srtInputRef.current) {
+                            srtInputRef.current.files = dataTransfer.files;
+                            srtInputRef.current.dispatchEvent(new Event('change', { bubbles: true }));
+                          }
+                        }
+                      }}
                     >
                       <svg className="w-16 h-16 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M4 7V4a2 2 0 0 1 2-2h8.5L20 7.5V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
@@ -1408,8 +1484,100 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                       <div className="text-center">
                         <p className="text-2xl font-bold text-neutral-700 mb-2">Upload SRT file</p>
                         <p className="text-lg text-neutral-500">English master subtitle file (.srt)</p>
+                        <p className="text-sm text-neutral-400 mt-1">Click or drag and drop</p>
                       </div>
-                    </button>
+                    </label>
+                  )}
+                </div>
+              </div>
+            ) : storyboardMode ? (
+              <div className="flex flex-col rounded-2xl border-2 border-amber-200 overflow-hidden" style={{ minHeight: '400px' }}>
+                <div className="px-6 py-4 bg-amber-50 border-b-2 border-amber-200 flex items-center justify-between">
+                  <div>
+                    <span className="text-lg font-bold text-amber-900 uppercase tracking-wide">Storyboard Translation</span>
+                    <p className="text-sm text-amber-700 mt-1">Upload a storyboard PPTX to translate dialog with timecode alignment</p>
+                  </div>
+                  {targetLanguages.length > 0 && (
+                    <span className="px-3 py-1 bg-amber-600 text-white text-sm font-bold rounded-full">
+                      {targetLanguages.length} language{targetLanguages.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 flex items-center justify-center p-10 bg-white">
+                  <input
+                    id="storyboard-file-input"
+                    ref={storyboardInputRef}
+                    type="file"
+                    accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    onChange={handleStoryboardFileUpload}
+                    className="hidden"
+                  />
+                  {isProcessing ? (
+                    <div className="text-center">
+                      <Loader2 className="w-16 h-16 text-amber-500 animate-spin mx-auto mb-6" />
+                      <p className="text-2xl font-bold text-neutral-700 mb-2">{processingStage}</p>
+                      <p className="text-lg text-neutral-500">{processingDetail}</p>
+                    </div>
+                  ) : uploadedFile ? (
+                    <div className="text-center w-full max-w-2xl">
+                      <svg className="w-20 h-20 mx-auto mb-6 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="2" y="3" width="20" height="18" rx="2" />
+                        <path d="M2 7h20" />
+                        <path d="M9 3v4" />
+                        <path d="M15 3v4" />
+                        <path d="M7 11h2v2H7z" />
+                        <path d="M11 11h2v2h-2z" />
+                        <path d="M15 11h2v2h-2z" />
+                        <path d="M7 15h2v2H7z" />
+                        <path d="M11 15h2v2h-2z" />
+                      </svg>
+                      <p className="text-2xl font-bold text-neutral-900 mb-2">{uploadedFile.name}</p>
+                      <p className="text-lg text-neutral-500 mb-4">{(uploadedFile.size / 1024).toFixed(1)} KB</p>
+                      <button
+                        onClick={() => { setUploadedFile(null); setStoryboardResults(null); }}
+                        className="mt-6 px-6 py-3 text-red-500 hover:text-red-600 text-lg font-bold transition-colors"
+                      >
+                        Remove File
+                      </button>
+                    </div>
+                  ) : (
+                    <label
+                      htmlFor="storyboard-file-input"
+                      className="flex flex-col items-center gap-6 p-16 border-4 border-dashed border-amber-300 rounded-3xl hover:border-amber-500 hover:bg-amber-50/50 transition-all cursor-pointer"
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add('border-amber-500', 'bg-amber-50/50'); }}
+                      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('border-amber-500', 'bg-amber-50/50'); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.currentTarget.classList.remove('border-amber-500', 'bg-amber-50/50');
+                        const file = e.dataTransfer.files[0];
+                        if (file && (file.name.endsWith('.pptx') || file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation')) {
+                          const dataTransfer = new DataTransfer();
+                          dataTransfer.items.add(file);
+                          if (storyboardInputRef.current) {
+                            storyboardInputRef.current.files = dataTransfer.files;
+                            storyboardInputRef.current.dispatchEvent(new Event('change', { bubbles: true }));
+                          }
+                        }
+                      }}
+                    >
+                      <svg className="w-16 h-16 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="2" y="3" width="20" height="18" rx="2" />
+                        <path d="M2 7h20" />
+                        <path d="M9 3v4" />
+                        <path d="M15 3v4" />
+                        <path d="M7 11h2v2H7z" />
+                        <path d="M11 11h2v2h-2z" />
+                        <path d="M15 11h2v2h-2z" />
+                        <path d="M7 15h2v2H7z" />
+                        <path d="M11 15h2v2h-2z" />
+                      </svg>
+                      <div className="text-center">
+                        <p className="text-2xl font-bold text-neutral-700 mb-2">Upload Storyboard</p>
+                        <p className="text-lg text-neutral-500">PowerPoint storyboard file (.pptx)</p>
+                        <p className="text-sm text-neutral-400 mt-1">Click or drag and drop</p>
+                      </div>
+                    </label>
                   )}
                 </div>
               </div>
@@ -1571,6 +1739,28 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                   </button>
                 </div>
               )
+            ) : storyboardMode ? (
+              !storyboardResults && (
+                <div className="mt-12 flex justify-center">
+                  <button
+                    onClick={handleStoryboardTranslate}
+                    disabled={isProcessing || !uploadedFile || targetLanguages.length === 0}
+                    className="px-12 py-5 bg-amber-600 hover:bg-amber-700 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-black text-lg rounded-full transition-all flex items-center gap-3 shadow-2xl shadow-amber-600/20 hover:scale-105 disabled:hover:scale-100 uppercase tracking-wide"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-7 h-7 animate-spin" />
+                        Translating Storyboard...
+                      </>
+                    ) : (
+                      <>
+                        Translate Storyboard
+                        <ArrowRight className="w-7 h-7" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              )
             ) : (
               !result && (
                 <div className="mt-12 flex justify-center">
@@ -1706,8 +1896,11 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
             <div className="space-y-6">
               {Object.entries(srtResults).map(([lang, res]) => {
                 const v = res.validationSummary;
-                const allPass = v.failingCues === 0 && v.warningCues === 0;
-                const hasFailures = v.failingCues > 0;
+                const audit = res.auditResult;
+                const auditScore = audit?.score ?? 0;
+                const auditStatus = audit?.status || 'N/A';
+                const allPass = v.failingCues === 0 && v.warningCues === 0 && auditStatus === 'PASS';
+                const hasFailures = v.failingCues > 0 || auditStatus === 'FAIL';
 
                 return (
                   <div key={lang} className="bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden shadow-lg">
@@ -1715,6 +1908,12 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                       <div className="flex items-center gap-4">
                         <div className={`w-4 h-4 rounded-full ${allPass ? 'bg-emerald-500' : hasFailures ? 'bg-red-500' : 'bg-amber-500'}`} />
                         <h3 className="text-xl font-black text-neutral-900 uppercase tracking-tight">{lang}</h3>
+                        <span className={`text-sm font-bold px-2.5 py-0.5 rounded-full ${auditStatus === 'PASS' ? 'bg-emerald-100 text-emerald-700' : auditStatus === 'FAIL' ? 'bg-red-100 text-red-700' : 'bg-neutral-100 text-neutral-500'}`}>
+                          {auditStatus}
+                        </span>
+                        <span className={`text-sm font-bold ${auditScore >= 95 ? 'text-emerald-600' : auditScore >= 85 ? 'text-amber-600' : 'text-red-600'}`}>
+                          {auditScore}/100
+                        </span>
                         <span className="text-sm text-neutral-500">
                           {(res.processingTimeMs / 1000).toFixed(1)}s
                         </span>
@@ -1733,8 +1932,10 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                     </div>
 
                     <div className="p-6">
-                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-9 gap-4 mb-6">
                         {[
+                          { label: 'Score', value: `${auditScore}/100`, color: auditScore >= 95 ? 'text-emerald-600' : auditScore >= 85 ? 'text-amber-600' : 'text-red-600' },
+                          { label: 'Status', value: auditStatus, color: auditStatus === 'PASS' ? 'text-emerald-600' : 'text-red-600' },
                           { label: 'Cues', value: v.totalCues.toString(), color: 'text-neutral-800' },
                           { label: 'Passing', value: v.passingCues.toString(), color: 'text-emerald-600' },
                           { label: 'Warnings', value: v.warningCues.toString(), color: v.warningCues > 0 ? 'text-amber-600' : 'text-neutral-400' },
@@ -1764,6 +1965,33 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                         </div>
                       )}
 
+                      {/* Audit Errors */}
+                      {audit && audit.errors.length > 0 && (
+                        <div className="p-4 bg-red-50 border border-red-200 rounded-xl mb-4">
+                          <p className="font-bold text-red-800 text-sm uppercase tracking-wider mb-2">Audit Findings ({audit.errors.length})</p>
+                          <ul className="space-y-2">
+                            {audit.errors.map((err: any, i: number) => (
+                              <li key={i} className="text-sm flex items-start gap-2">
+                                <span className={`flex-shrink-0 text-xs font-bold px-1.5 py-0.5 rounded ${err.severity === 'critical' ? 'bg-red-200 text-red-800' : err.severity === 'major' ? 'bg-amber-200 text-amber-800' : 'bg-neutral-200 text-neutral-700'}`}>
+                                  {(err.severity || 'minor').toUpperCase()}
+                                </span>
+                                <span className="text-neutral-700">
+                                  {err.issue}
+                                  {err.suggested ? <span className="text-emerald-700 ml-1">Fix: "{err.suggested}"</span> : null}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Audit Notes */}
+                      {audit?.rawNotes && (
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl mb-4">
+                          <p className="text-sm text-blue-800">{audit.rawNotes}</p>
+                        </div>
+                      )}
+
                       <details className="group">
                         <summary className="cursor-pointer text-sm font-bold text-neutral-500 hover:text-neutral-700 uppercase tracking-wider flex items-center gap-2">
                           <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
@@ -1773,11 +2001,298 @@ const ToolPage: React.FC<{ onNavigateHome: () => void; onNavigateToAdmin: () => 
                           <pre className="text-sm text-neutral-300 font-mono whitespace-pre-wrap">{res.srtContent.substring(0, 3000)}{res.srtContent.length > 3000 ? '\n...' : ''}</pre>
                         </div>
                       </details>
+
+                      {/* Full Translation Block */}
+                      <details className="group mt-4">
+                        <summary className="cursor-pointer text-sm font-bold text-neutral-500 hover:text-neutral-700 uppercase tracking-wider flex items-center gap-2">
+                          <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
+                          Full Translation
+                        </summary>
+                        <div className="mt-4">
+                          <div className="flex justify-end mb-2">
+                            <button
+                              onClick={() => {
+                                const fullText = res.processingResult.fittedCues.map(c => c.translatedText).join('\n\n');
+                                navigator.clipboard.writeText(fullText);
+                              }}
+                              className="px-3 py-1.5 text-xs font-bold text-neutral-500 hover:text-neutral-700 border border-neutral-300 hover:border-neutral-400 rounded-lg transition-all flex items-center gap-1.5"
+                            >
+                              <Copy className="w-3 h-3" />
+                              Copy Full Text
+                            </button>
+                          </div>
+                          <div className="p-5 bg-neutral-50 border border-neutral-200 rounded-xl">
+                            {res.processingResult.fittedCues.map((cue, i) => (
+                              <p key={i} className={`text-sm text-neutral-800 leading-relaxed ${i > 0 ? 'mt-3' : ''}`}>
+                                {cue.translatedText}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      </details>
+
+                      {/* Dubbing Reference Table */}
+                      <details className="group mt-4">
+                        <summary className="cursor-pointer text-sm font-bold text-neutral-500 hover:text-neutral-700 uppercase tracking-wider flex items-center gap-2">
+                          <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
+                          Dubbing Reference Table
+                        </summary>
+                        <div className="mt-4">
+                          <div className="flex justify-end mb-2">
+                            <button
+                              onClick={() => {
+                                const header = 'Cue\tTimecode\tDuration\tEnglish\tTranslation';
+                                const rows = res.processingResult.fittedCues.map(c =>
+                                  `${c.index}\t${c.startTime} --> ${c.endTime}\t${c.duration.toFixed(1)}s\t${c.originalText}\t${c.translatedText}`
+                                );
+                                navigator.clipboard.writeText([header, ...rows].join('\n'));
+                              }}
+                              className="px-3 py-1.5 text-xs font-bold text-neutral-500 hover:text-neutral-700 border border-neutral-300 hover:border-neutral-400 rounded-lg transition-all flex items-center gap-1.5"
+                            >
+                              <Copy className="w-3 h-3" />
+                              Copy as TSV
+                            </button>
+                          </div>
+                          <div className="border border-neutral-200 rounded-xl overflow-hidden">
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="bg-neutral-900 text-white text-xs uppercase tracking-wider">
+                                    <th className="px-3 py-3 text-left font-bold w-12">#</th>
+                                    <th className="px-3 py-3 text-left font-bold w-44">Timecode</th>
+                                    <th className="px-3 py-3 text-center font-bold w-16">Dur.</th>
+                                    <th className="px-3 py-3 text-left font-bold">English</th>
+                                    <th className="px-3 py-3 text-left font-bold">{lang}</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {res.processingResult.fittedCues.map((cue, i) => (
+                                    <tr key={i} className={`border-t border-neutral-200 ${i % 2 === 0 ? 'bg-white' : 'bg-neutral-50'} ${cue.violations.some(v => v.severity === 'critical') ? 'border-l-4 border-l-red-400' : cue.violations.some(v => v.severity === 'warning') ? 'border-l-4 border-l-amber-400' : 'border-l-4 border-l-emerald-400'}`}>
+                                      <td className="px-3 py-3 font-mono text-neutral-500 text-xs">{cue.index}</td>
+                                      <td className="px-3 py-3 font-mono text-neutral-600 text-xs whitespace-nowrap">{cue.startTime} {'->'} {cue.endTime}</td>
+                                      <td className="px-3 py-3 text-center font-mono text-neutral-500 text-xs">{cue.duration.toFixed(1)}s</td>
+                                      <td className="px-3 py-3 text-neutral-700">{cue.originalText}</td>
+                                      <td className="px-3 py-3 text-neutral-900 font-medium">{cue.translatedText}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+                      </details>
                     </div>
                   </div>
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+      {storyboardResults && (
+        <div className="bg-gradient-to-br from-amber-50 to-white py-16">
+          <div className="max-w-6xl mx-auto px-4 sm:px-8">
+            <div className="flex items-center justify-between mb-10">
+              <div>
+                <h2 className="text-3xl font-black text-neutral-900 uppercase tracking-tight">Storyboard Results</h2>
+                <p className="text-neutral-500 mt-2">
+                  {uploadedFile?.name} translated into {Object.keys(storyboardResults).length} language{Object.keys(storyboardResults).length !== 1 ? 's' : ''}
+                </p>
+              </div>
+            </div>
+            {Object.entries(storyboardResults).map(([lang, res]) => {
+              const stats = res.processingResult.stats;
+              const audit = res.auditResult;
+              const auditScore = audit?.score ?? 0;
+              const auditStatus = audit?.status || 'N/A';
+              return (
+                <div key={lang} className="bg-white rounded-3xl shadow-xl border border-neutral-200 p-6 sm:p-8 mb-8">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-4 h-4 rounded-full ${auditStatus === 'PASS' && stats.overFit === 0 ? 'bg-emerald-500' : auditStatus === 'FAIL' || stats.overFit > 1 ? 'bg-red-500' : 'bg-amber-500'}`} />
+                      <h3 className="text-xl sm:text-2xl font-black text-neutral-900 uppercase tracking-tight">{lang}</h3>
+                      <span className={`text-sm font-bold px-2.5 py-0.5 rounded-full ${auditStatus === 'PASS' ? 'bg-emerald-100 text-emerald-700' : auditStatus === 'FAIL' ? 'bg-red-100 text-red-700' : 'bg-neutral-100 text-neutral-500'}`}>
+                        {auditStatus}
+                      </span>
+                      <span className={`text-sm font-bold ${auditScore >= 95 ? 'text-emerald-600' : auditScore >= 85 ? 'text-amber-600' : 'text-red-600'}`}>
+                        {auditScore}/100
+                      </span>
+                      <span className="text-neutral-400 text-lg">{(res.processingTimeMs / 1000).toFixed(1)}s</span>
+                    </div>
+                  </div>
+
+                  {/* Stats row */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
+                    {[
+                      { label: 'Score', value: `${auditScore}/100`, color: auditScore >= 95 ? 'text-emerald-600' : auditScore >= 85 ? 'text-amber-600' : 'text-red-600' },
+                      { label: 'Status', value: auditStatus, color: auditStatus === 'PASS' ? 'text-emerald-600' : 'text-red-600' },
+                      { label: 'Shots', value: stats.totalShots.toString(), color: 'text-neutral-900' },
+                      { label: 'Good Fit', value: stats.goodFit.toString(), color: stats.goodFit === stats.totalShots ? 'text-emerald-600' : 'text-neutral-900' },
+                      { label: 'Tight', value: stats.tightFit.toString(), color: stats.tightFit > 0 ? 'text-amber-600' : 'text-neutral-400' },
+                      { label: 'Over', value: stats.overFit.toString(), color: stats.overFit > 0 ? 'text-red-600' : 'text-neutral-400' },
+                      { label: 'Avg Expansion', value: `${stats.avgExpansion > 0 ? '+' : ''}${stats.avgExpansion}%`, color: stats.avgExpansion > 25 ? 'text-amber-600' : 'text-neutral-900' },
+                    ].map((s, i) => (
+                      <div key={i} className="text-center p-4 bg-neutral-50 rounded-2xl">
+                        <div className={`text-2xl font-black ${s.color}`}>{s.value}</div>
+                        <div className="text-xs font-bold text-neutral-500 uppercase tracking-wider mt-1">{s.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Audit Errors */}
+                  {audit && audit.errors.length > 0 && (
+                    <div className="p-4 bg-red-50 border border-red-200 rounded-xl mb-6">
+                      <p className="font-bold text-red-800 text-sm uppercase tracking-wider mb-2">Audit Findings ({audit.errors.length})</p>
+                      <ul className="space-y-2">
+                        {audit.errors.map((err: any, i: number) => (
+                          <li key={i} className="text-sm flex items-start gap-2">
+                            <span className={`flex-shrink-0 text-xs font-bold px-1.5 py-0.5 rounded ${err.severity === 'critical' ? 'bg-red-200 text-red-800' : err.severity === 'major' ? 'bg-amber-200 text-amber-800' : 'bg-neutral-200 text-neutral-700'}`}>
+                              {(err.severity || 'minor').toUpperCase()}
+                            </span>
+                            <span className="text-neutral-700">
+                              {err.issue}
+                              {err.suggested ? <span className="text-emerald-700 ml-1">Fix: "{err.suggested}"</span> : null}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Audit Notes */}
+                  {audit?.rawNotes && (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl mb-6">
+                      <p className="text-sm text-blue-800">{audit.rawNotes}</p>
+                    </div>
+                  )}
+
+                  {/* Full Translation */}
+                  <details className="group mt-4">
+                    <summary className="cursor-pointer text-sm font-bold text-neutral-500 hover:text-neutral-700 uppercase tracking-wider flex items-center gap-2">
+                      <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
+                      Full Translation
+                    </summary>
+                    <div className="mt-4">
+                      <div className="flex justify-end mb-2">
+                        <button
+                          onClick={() => {
+                            const fullText = res.processingResult.shots.map(s => s.translatedDialog).join('\n\n---\n\n');
+                            navigator.clipboard.writeText(fullText);
+                          }}
+                          className="px-3 py-1.5 text-xs font-bold text-neutral-500 hover:text-neutral-700 border border-neutral-300 hover:border-neutral-400 rounded-lg transition-all flex items-center gap-1.5"
+                        >
+                          <Copy className="w-3 h-3" />
+                          Copy Full Text
+                        </button>
+                      </div>
+                      <div className="p-5 bg-neutral-50 border border-neutral-200 rounded-xl space-y-6">
+                        {res.processingResult.shots.map((shotResult, i) => (
+                          <div key={i}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">Shot {shotResult.shot.shotNumber}</span>
+                              <span className="text-xs text-neutral-400">{shotResult.shot.startTime} - {shotResult.shot.endTime}</span>
+                            </div>
+                            <div className="text-sm text-neutral-800 leading-relaxed whitespace-pre-wrap">{shotResult.translatedDialog}</div>
+                            {i < res.processingResult.shots.length - 1 && <hr className="mt-6 border-neutral-200" />}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </details>
+
+                  {/* Dubbing Reference Table */}
+                  <details className="group mt-4" open>
+                    <summary className="cursor-pointer text-sm font-bold text-neutral-500 hover:text-neutral-700 uppercase tracking-wider flex items-center gap-2">
+                      <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
+                      Dubbing Reference Table
+                    </summary>
+                    <div className="mt-4">
+                      <div className="flex justify-end mb-2">
+                        <button
+                          onClick={() => {
+                            const header = 'Shot\tTimecode\tDuration\tSpeakers\tEnglish Dialog\tTranslation\tFit\tExpansion';
+                            const rows = res.processingResult.shots.map(s =>
+                              `${s.shot.shotNumber}\t${s.shot.startTime} - ${s.shot.endTime}\t${s.shot.duration}s\t${s.shot.speakers.join(', ')}\t${s.shot.dialog.replace(/\n/g, ' ')}\t${s.translatedDialog.replace(/\n/g, ' ')}\t${s.timingFit}\t${s.characterExpansion > 0 ? '+' : ''}${s.characterExpansion}%`
+                            );
+                            navigator.clipboard.writeText([header, ...rows].join('\n'));
+                          }}
+                          className="px-3 py-1.5 text-xs font-bold text-neutral-500 hover:text-neutral-700 border border-neutral-300 hover:border-neutral-400 rounded-lg transition-all flex items-center gap-1.5"
+                        >
+                          <Copy className="w-3 h-3" />
+                          Copy as TSV
+                        </button>
+                      </div>
+                      <div className="border border-neutral-200 rounded-xl overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-neutral-900 text-white text-xs uppercase tracking-wider">
+                                <th className="px-3 py-3 text-left font-bold w-16">Shot</th>
+                                <th className="px-3 py-3 text-left font-bold w-32">Timecode</th>
+                                <th className="px-3 py-3 text-center font-bold w-16">Dur.</th>
+                                <th className="px-3 py-3 text-left font-bold">English Dialog</th>
+                                <th className="px-3 py-3 text-left font-bold">{lang}</th>
+                                <th className="px-3 py-3 text-center font-bold w-16">Fit</th>
+                                <th className="px-3 py-3 text-center font-bold w-20">Exp.</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {res.processingResult.shots.map((shotResult, i) => (
+                                <tr key={i} className={`border-t border-neutral-200 ${i % 2 === 0 ? 'bg-white' : 'bg-neutral-50'} ${shotResult.timingFit === 'over' ? 'border-l-4 border-l-red-400' : shotResult.timingFit === 'tight' ? 'border-l-4 border-l-amber-400' : 'border-l-4 border-l-emerald-400'}`}>
+                                  <td className="px-3 py-3 font-mono text-neutral-600 text-xs font-bold">{shotResult.shot.shotNumber}</td>
+                                  <td className="px-3 py-3 font-mono text-neutral-600 text-xs whitespace-nowrap">{shotResult.shot.startTime} - {shotResult.shot.endTime}</td>
+                                  <td className="px-3 py-3 text-center font-mono text-neutral-500 text-xs">{shotResult.shot.duration}s</td>
+                                  <td className="px-3 py-3 text-neutral-700 whitespace-pre-wrap text-xs leading-relaxed">{shotResult.shot.dialog}</td>
+                                  <td className="px-3 py-3 text-neutral-900 font-medium whitespace-pre-wrap text-xs leading-relaxed">{shotResult.translatedDialog}</td>
+                                  <td className="px-3 py-3 text-center">
+                                    <span className={`text-xs font-bold px-2 py-0.5 rounded ${shotResult.timingFit === 'good' ? 'bg-emerald-100 text-emerald-700' : shotResult.timingFit === 'tight' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                                      {shotResult.timingFit}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-3 text-center font-mono text-xs">
+                                    <span className={shotResult.characterExpansion > 25 ? 'text-amber-600 font-bold' : 'text-neutral-500'}>
+                                      {shotResult.characterExpansion > 0 ? '+' : ''}{shotResult.characterExpansion}%
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+
+                  {/* Speaker Breakdown */}
+                  <details className="group mt-4">
+                    <summary className="cursor-pointer text-sm font-bold text-neutral-500 hover:text-neutral-700 uppercase tracking-wider flex items-center gap-2">
+                      <ChevronDown className="w-4 h-4 group-open:rotate-180 transition-transform" />
+                      Speaker Breakdown
+                    </summary>
+                    <div className="mt-4 space-y-4">
+                      {res.processingResult.shots.map((shotResult, i) => (
+                        <div key={i} className="p-4 bg-neutral-50 border border-neutral-200 rounded-xl">
+                          <div className="flex items-center gap-2 mb-3">
+                            <span className="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">Shot {shotResult.shot.shotNumber}</span>
+                            <span className="text-xs text-neutral-400">{shotResult.shot.startTime} - {shotResult.shot.endTime}</span>
+                          </div>
+                          <div className="space-y-3">
+                            {shotResult.speakerSegments.map((seg, j) => (
+                              <div key={j} className="grid grid-cols-[100px_1fr_1fr] gap-3 items-start">
+                                <span className="text-xs font-bold text-neutral-700 bg-neutral-200 px-2 py-1 rounded text-center">{seg.speaker}</span>
+                                <div className="text-xs text-neutral-600 leading-relaxed whitespace-pre-wrap">{seg.englishText}</div>
+                                <div className="text-xs text-neutral-900 font-medium leading-relaxed whitespace-pre-wrap">{seg.translatedText}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
